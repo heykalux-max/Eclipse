@@ -1,0 +1,28 @@
+# Dati utente e risultati delle scansioni (mai nel repository)
+data/
+Quarantine/
+Reports/
+*.log
+
+# Build e binari (pubblicali su GitHub Releases, non nel codice)
+*.exe
+*.zip
+_internal/
+build/
+dist/
+*.build/
+*.dist/
+*.onefile-build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Editor / sistema
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
