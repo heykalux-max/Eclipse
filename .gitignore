@@ -6,6 +6,7 @@ Reports/
 
 # Build e binari (pubblicali su GitHub Releases, non nel codice)
 *.exe
+!release/Eclipse.exe
 *.zip
 _internal/
 build/
@@ -26,3 +27,6 @@ venv/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Nuitka
+nuitka-crash-report.xml

@@ -61,16 +61,30 @@ BASE, LAUNCHER, OWN_EXES, OWN_DIRS = app_identity()
 DATA = os.path.join(BASE, "data")
 QUAR = os.path.join(BASE, "Quarantine")
 REPORTS = os.path.join(BASE, "Reports")
-# old Italian folder names from earlier versions
-for _old, _new in (("Quarantena", QUAR), ("Report", REPORTS)):
-    _op = os.path.join(BASE, _old)
-    if os.path.isdir(_op) and not os.path.exists(_new):
-        try:
-            os.rename(_op, _new)
-        except OSError:
-            pass
-for _d in (DATA, QUAR, REPORTS):
-    os.makedirs(_d, exist_ok=True)
+# System-scan workers re-import this module but get their paths from the parent: they must not
+# create folders (in a Nuitka onefile build they would see the extraction folder as BASE).
+# parent_process() is still None while a spawned worker imports this module and Nuitka strips
+# "--multiprocessing-fork" from sys.argv, so several signals are checked.
+_IS_WORKER = (
+    __name__ == "__mp_main__"
+    or "--multiprocessing-fork" in sys.argv
+    or "--multiprocessing-fork" in getattr(sys, "orig_argv", ())
+    or multiprocessing.parent_process() is not None
+    # Nuitka onefile: only workers resolve the launcher to the extracted inner exe
+    or ("__compiled__" in globals() and getattr(__compiled__, "onefile", False)  # noqa: F821
+        and os.path.normcase(LAUNCHER or "") == os.path.normcase(os.path.abspath(sys.executable)))
+)
+if not _IS_WORKER:
+    # old Italian folder names from earlier versions
+    for _old, _new in (("Quarantena", QUAR), ("Report", REPORTS)):
+        _op = os.path.join(BASE, _old)
+        if os.path.isdir(_op) and not os.path.exists(_new):
+            try:
+                os.rename(_op, _new)
+            except OSError:
+                pass
+    for _d in (DATA, QUAR, REPORTS):
+        os.makedirs(_d, exist_ok=True)
 engine.set_self(OWN_DIRS, OWN_EXES)                     # Eclipse never flags its own files
 sysmon.init(DATA, OWN_EXES, LAUNCHER)
 

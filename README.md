@@ -2,6 +2,14 @@
 
 Scanner di minacce per Windows con interfaccia desktop (PySide6).
 
+## Download
+
+**[⬇ Scarica Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64 bit, versione 1.1.0)
+
+Un solo file, nessuna installazione: mettilo in una cartella a tua scelta e avvialo. Accanto all'eseguibile vengono create le cartelle `data`, `Quarantine` e `Reports`.
+
+> Windows SmartScreen può mostrare "Windows ha protetto il PC" perché l'eseguibile non è ancora firmato digitalmente: clicca **Ulteriori informazioni → Esegui comunque**.
+
 ## Funzionalità
 
 - **Scansione file e link**: analisi euristica di eseguibili PE, script, archivi e documenti, con verdetto SAFE / SUSPICIOUS / DANGEROUS e spiegazione dei motivi.

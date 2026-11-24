@@ -18,6 +18,8 @@ import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, wait, FIRST_COMPLETED
 
+import psutil
+
 import engine
 import sysmon
 
@@ -208,6 +210,19 @@ def _init(data_dir, self_dirs=None, self_exes=None):
     except Exception:
         pass
     _FS = engine.FileScanner(FAST_SETTINGS, data_dir, engine.LinkScanner(FAST_SETTINGS, data_dir))
+    _watch_parent()
+
+
+def _watch_parent():
+    """Worker exits on its own if Eclipse is killed (e.g. from Task Manager) instead of lingering."""
+    ppid = os.getppid()
+
+    def loop():
+        while True:
+            time.sleep(2)
+            if not psutil.pid_exists(ppid):
+                os._exit(0)
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def _scan_batch(items):
