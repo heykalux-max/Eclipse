@@ -2,42 +2,42 @@
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)
 ![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB)
-![Licenza MIT](https://img.shields.io/badge/licenza-MIT-green)
+![License MIT](https://img.shields.io/badge/license-MIT-green)
 
-Scanner di minacce open source per Windows, con interfaccia desktop (PySide6). Analizza file, link, processi, programmi in avvio automatico e connessioni di rete, e spiega sempre **perché** qualcosa è considerato pericoloso.
+Open source threat scanner for Windows with a desktop interface (PySide6). It analyzes files, links, processes, startup programs and network connections, and always explains **why** something is considered dangerous.
 
-> **Nota:** Eclipse è un progetto indipendente basato su analisi euristica. È utile come secondo parere, ma non sostituisce un antivirus certificato (ad esempio Microsoft Defender): tienilo attivo insieme a Eclipse.
+> **Note:** Eclipse is an independent project based on heuristic analysis. It is useful as a second opinion, but it does not replace a certified antivirus (such as Microsoft Defender): keep that running alongside Eclipse.
 
 ## Download
 
-**[⬇ Scarica Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64 bit, versione 1.1.0)
+**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.1.0)
 
-Un solo file, nessuna installazione: mettilo in una cartella a tua scelta e avvialo. Accanto all'eseguibile vengono create le cartelle `data`, `Quarantine` e `Reports`.
+A single file, no installation: put it in a folder of your choice and run it. The `data`, `Quarantine` and `Reports` folders are created next to the executable.
 
-> Windows SmartScreen può mostrare "Windows ha protetto il PC" perché l'eseguibile non è ancora firmato digitalmente: clicca **Ulteriori informazioni → Esegui comunque**. Se preferisci, puoi compilarlo tu dal codice sorgente (vedi [Build](#build-eseguibile-singolo)).
+> Windows SmartScreen may show "Windows protected your PC" because the executable is not digitally signed yet: click **More info → Run anyway**. If you prefer, you can build it yourself from source (see [Build](#build-single-executable)).
 
-## Funzionalità
+## Features
 
-- **Scansione file e link**: analisi euristica di eseguibili PE, script, archivi e documenti, con verdetto SAFE / SUSPICIOUS / DANGEROUS e spiegazione dei motivi.
-- **System Scan**: scansione Rapida, Completa o Personalizzata del PC, multi-processo, con cache e verifica delle firme digitali (Authenticode) per ridurre i falsi positivi.
-- **Protezione in tempo reale**: monitoraggio delle cartelle a rischio (Download, Desktop, Temp…).
-- **Processi**: elenco dei processi attivi con analisi e possibilità di terminarli.
-- **Avvio automatico**: controllo delle voci di avvio (registro, cartelle Startup, attività pianificate).
-- **Rete**: connessioni attive per processo, con DNS inverso e porte sospette.
-- **Quarantena e report** esportabili.
+- **File and link scanning**: heuristic analysis of PE executables, scripts, archives and documents, with a SAFE / SUSPICIOUS / DANGEROUS verdict and an explanation of the reasons.
+- **System Scan**: Quick, Full or Custom scan of the PC, multi-process, with caching and digital signature verification (Authenticode) to reduce false positives.
+- **Real-time protection**: monitoring of high-risk folders (Downloads, Desktop, Temp…).
+- **Processes**: list of running processes with analysis and the option to terminate them.
+- **Startup**: review of startup entries (registry, Startup folders, scheduled tasks).
+- **Network**: active connections per process, with reverse DNS and suspicious ports.
+- **Quarantine and exportable reports**.
 
 ## Privacy
 
-L'analisi dei file avviene sul tuo PC: i file, la quarantena e i report restano nelle cartelle locali accanto all'eseguibile e non vengono mai caricati online. Eclipse usa la rete solo in questi casi:
+File analysis happens on your PC: files, quarantine and reports stay in the local folders next to the executable and are never uploaded. Eclipse uses the network only in these cases:
 
-- **VirusTotal (facoltativo)**: se inserisci una tua chiave API, invia a VirusTotal l'hash SHA-256 dei file analizzati (non il file) e gli indirizzi dei link che controlli.
-- **Liste di phishing**: scarica elenchi pubblici di siti di phishing noti (OpenPhish, Phishing.Database).
-- **Analisi dei link**: risolve il dominio e contatta il sito per seguire i redirect e leggere la pagina.
-- **Rete**: il DNS inverso delle connessioni attive.
+- **VirusTotal (optional)**: if you enter your own API key, it sends VirusTotal the SHA-256 hash of analyzed files (not the file itself) and the addresses of the links you check.
+- **Phishing lists**: it downloads public lists of known phishing sites (OpenPhish, Phishing.Database).
+- **Link analysis**: it resolves the domain and contacts the site to follow redirects and read the page.
+- **Network**: reverse DNS lookups for active connections.
 
-## Avvio dal codice sorgente
+## Running from source
 
-Requisiti:
+Requirements:
 
 - Windows 10/11
 - Python 3.14
@@ -49,47 +49,47 @@ pip install -r requirements.txt
 python src\main.py
 ```
 
-Opzioni da riga di comando:
+Command-line options:
 
-| Opzione | Effetto |
+| Option | Effect |
 |---|---|
-| `--tray` | avvia ridotto nell'area di notifica |
-| `--quick-scan` | avvia subito una scansione rapida del sistema |
+| `--tray` | start minimized to the notification area |
+| `--quick-scan` | start a quick system scan right away |
 
-## Build (eseguibile singolo)
+## Build (single executable)
 
-Serve Visual Studio Build Tools (MSVC).
+Requires Visual Studio Build Tools (MSVC).
 
 ```powershell
 pip install nuitka zstandard
 .\build.ps1
 ```
 
-L'eseguibile viene creato in `dist\Eclipse.exe`. Per tenere i file intermedi fuori da OneDrive usa `.\build.ps1 -BuildDir C:\temp\ecl`.
+The executable is created in `dist\Eclipse.exe`. To keep intermediate files out of OneDrive, use `.\build.ps1 -BuildDir C:\temp\ecl`.
 
-## Struttura
+## Project structure
 
-| File | Contenuto |
+| File | Contents |
 |---|---|
-| `src/main.py` | interfaccia grafica e avvio |
-| `src/engine.py` | motore di analisi file e link |
-| `src/fullscan.py` | System Scan (multi-processo, cache, policy anti falsi positivi) |
-| `src/sysmon.py` | processi, rete, avvio automatico, firme digitali |
-| `src/make_icon.py` | genera `eclipse.ico` / `eclipse.png` |
-| `release/Eclipse.exe` | ultima versione compilata, per il download diretto |
+| `src/main.py` | graphical interface and startup |
+| `src/engine.py` | file and link analysis engine |
+| `src/fullscan.py` | System Scan (multi-process, caching, false-positive policy) |
+| `src/sysmon.py` | processes, network, startup, digital signatures |
+| `src/make_icon.py` | generates `eclipse.ico` / `eclipse.png` |
+| `release/Eclipse.exe` | latest compiled version, for direct download |
 
-Le cartelle `data/`, `Quarantine/` e `Reports/` contengono i dati locali dell'utente e sono escluse dal repository tramite `.gitignore`.
+The `data/`, `Quarantine/` and `Reports/` folders hold the user's local data and are excluded from the repository via `.gitignore`.
 
-## Contribuire
+## Contributing
 
-Contributi, segnalazioni e idee sono benvenuti.
+Contributions, bug reports and ideas are welcome.
 
-- **Bug o falsi positivi**: apri una [issue](https://github.com/heykalux-max/Eclipse/issues) indicando la versione di Windows, il file o il processo coinvolto (nome e hash SHA-256, mai il file stesso se è malware) e il verdetto ricevuto.
-- **Codice**: fai un fork, crea un branch per la modifica e apri una pull request con una breve descrizione di cosa cambia e come l'hai provato.
-- **Vulnerabilità di sicurezza** in Eclipse stesso: non aprire una issue pubblica, usa la funzione [Report a vulnerability](https://github.com/heykalux-max/Eclipse/security/advisories/new) di GitHub.
+- **Bugs or false positives**: open an [issue](https://github.com/heykalux-max/Eclipse/issues) with your Windows version, the file or process involved (name and SHA-256 hash, never the file itself if it is malware) and the verdict you got.
+- **Code**: fork the repo, create a branch for your change and open a pull request with a short description of what it changes and how you tested it.
+- **Security vulnerabilities** in Eclipse itself: do not open a public issue, use GitHub's [Report a vulnerability](https://github.com/heykalux-max/Eclipse/security/advisories/new) feature.
 
-## Licenza
+## License
 
-Distribuito con licenza [MIT](LICENSE): puoi usarlo, modificarlo e ridistribuirlo liberamente, mantenendo l'avviso di copyright.
+Released under the [MIT](LICENSE) license: you can use, modify and redistribute it freely, as long as you keep the copyright notice.
 
-Eclipse usa librerie di terze parti con le proprie licenze: [PySide6](https://doc.qt.io/qtforpython-6/licenses.html) (LGPL v3), [pefile](https://github.com/erocarrera/pefile) (MIT) e [psutil](https://github.com/giampaolo/psutil) (BSD-3-Clause).
+Eclipse uses third-party libraries under their own licenses: [PySide6](https://doc.qt.io/qtforpython-6/licenses.html) (LGPL v3), [pefile](https://github.com/erocarrera/pefile) (MIT) and [psutil](https://github.com/giampaolo/psutil) (BSD-3-Clause).
