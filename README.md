@@ -10,7 +10,7 @@ Open source threat scanner for Windows with a desktop interface (PySide6). It an
 
 ## Download
 
-**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.1.0)
+**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.2.0)
 
 A single file, no installation: put it in a folder of your choice and run it. The `data`, `Quarantine` and `Reports` folders are created next to the executable.
 
@@ -23,11 +23,25 @@ A single file, no installation: put it in a folder of your choice and run it. Th
 - **Script deobfuscation**: unpacks Base64 / `-EncodedCommand`, gzip/deflate, string concatenation, char codes, escapes, reversed strings and variable tricks in PowerShell, batch, VBScript, JavaScript and macros, then re-analyzes the hidden code.
 - **AMSI scanning**: scripts, macros, decoded payloads and files inside archives are also checked in memory by the installed antivirus through the Windows Antimalware Scan Interface.
 - **Real-time protection**: monitoring of high-risk folders (Downloads, Desktop, Temp…).
-- **Ransomware shield**: decoy files and burst detection in Documents, Desktop and Pictures; a program that starts encrypting or destroying files is frozen and you choose whether to terminate it.
-- **Processes**: list of running processes with analysis and the option to terminate them. **Memory scan** looks for injected code, threads started from unbacked memory and process hollowing.
+- **Ransomware shield** (Plus): decoy files and burst detection in Documents, Desktop and Pictures; a program that starts encrypting or destroying files is frozen and you choose whether to terminate it.
+- **Processes**: list of running processes with analysis and the option to terminate them. **Memory scan** (Plus) looks for injected code, threads started from unbacked memory and process hollowing.
 - **Startup**: review of startup entries (registry, Startup folders, scheduled tasks).
 - **Network**: active connections per process, with reverse DNS and suspicious ports.
 - **Quarantine and exportable reports**.
+
+## Eclipse Plus
+
+Everything above is free. **Eclipse Plus** is an optional subscription that adds:
+
+| Plus feature | What it does |
+|---|---|
+| Ransomware shield | decoy files and burst detection in Documents, Desktop and Pictures; a program that starts encrypting your files is frozen on the spot |
+| Process memory scan | finds code injected into other programs, threads started from unbacked memory and process hollowing |
+| Scheduled scans | a quick system scan runs by itself every day or every week, even with Eclipse closed |
+
+How it works: after subscribing you receive a license key (`ECL1-…`). Paste it in **Eclipse Plus → License key**. The key is checked offline on your PC with a digital signature, nothing is sent online. A subscription key carries its end date; when you renew you receive a new key.
+
+**How to get it:** coming soon.
 
 ## Privacy
 
@@ -82,6 +96,8 @@ The executable is created in `dist\Eclipse.exe`. To keep intermediate files out 
 | `src/amsi.py` | Windows AMSI in-memory scanning |
 | `src/memscan.py` | process memory scanner (injection, hollowing) |
 | `src/ransomguard.py` | anti-ransomware behaviour shield |
+| `src/plus.py` | Eclipse Plus license check (Ed25519 signed keys) |
+| `tools/license_tool.py` | issues Plus keys (needs the private signing key, which is not in the repository) |
 | `src/make_icon.py` | generates `eclipse.ico` / `eclipse.png` |
 | `release/Eclipse.exe` | latest compiled version, for direct download |
 

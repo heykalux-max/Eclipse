@@ -1154,13 +1154,19 @@ class FolderWatcher:
 # --------------------------------------------------------------------------- #
 #  Launch at Windows startup (for Eclipse itself)
 # --------------------------------------------------------------------------- #
-def self_startup_command():
+def self_command(args="--tray"):
+    """(program, arguments) that start this copy of Eclipse: the onefile exe, a frozen exe or pythonw + main.py."""
     if LAUNCHER:
-        return f'"{LAUNCHER}" --tray'
+        return LAUNCHER, args
     if getattr(sys, "frozen", False):
-        return f'"{os.path.abspath(sys.executable)}" --tray'
+        return os.path.abspath(sys.executable), args
     pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    return f'"{pyw if os.path.exists(pyw) else sys.executable}" "{os.path.abspath(sys.argv[0])}" --tray'
+    return (pyw if os.path.exists(pyw) else sys.executable), f'"{os.path.abspath(sys.argv[0])}" {args}'
+
+
+def self_startup_command(args="--tray"):
+    exe, a = self_command(args)
+    return f'"{exe}" {a}'
 
 
 def set_self_startup(on):
@@ -1180,4 +1186,71 @@ def get_self_startup():
             winreg.QueryValueEx(k, "Eclipse")
             return True
     except OSError:
+        return False
+
+
+# --------------------------------------------------------------------------- #
+#  Scheduled quick scan (Windows Task Scheduler, current user, no admin needed)
+# --------------------------------------------------------------------------- #
+SCHED_TASK = "Eclipse Scheduled Scan" + os.environ.get("ECLIPSE_INSTANCE_TAG", "")
+SCHED_DAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+
+
+def set_scheduled_scan(freq, hhmm="13:00", day="SUN"):
+    """freq: 'off' | 'daily' | 'weekly'. Raises RuntimeError with schtasks' message on failure."""
+    if freq == "off":
+        if scheduled_scan_exists():
+            r = subprocess.run(["schtasks", "/Delete", "/TN", SCHED_TASK, "/F"], capture_output=True,
+                               timeout=30, creationflags=NO_WINDOW)
+            if r.returncode:
+                raise RuntimeError((r.stderr or r.stdout).decode("mbcs", "replace").strip())
+        return
+    exe, args = self_command("--tray --quick-scan")
+    # The task's action is built from XML so the program path and its arguments stay separate
+    # (schtasks /TR is limited to 261 characters and mangles nested quotes).
+    from xml.sax.saxutils import escape
+    start = time.strftime("%Y-%m-%d") + f"T{hhmm}:00"
+    if freq == "daily":
+        trig = "<ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>"
+    else:
+        names = {"MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday", "FRI": "Friday",
+                 "SAT": "Saturday", "SUN": "Sunday"}
+        trig = (f"<ScheduleByWeek><WeeksInterval>1</WeeksInterval><DaysOfWeek><{names[day]} />"
+                f"</DaysOfWeek></ScheduleByWeek>")
+    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Eclipse Plus: scheduled quick system scan</Description></RegistrationInfo>
+  <Triggers><CalendarTrigger><StartBoundary>{start}</StartBoundary><Enabled>true</Enabled>{trig}</CalendarTrigger></Triggers>
+  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{escape(exe)}</Command><Arguments>{escape(args)}</Arguments></Exec></Actions>
+</Task>"""
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(xml.encode("utf-16"))
+        r = subprocess.run(["schtasks", "/Create", "/TN", SCHED_TASK, "/XML", path, "/F"], capture_output=True,
+                           timeout=30, creationflags=NO_WINDOW)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).decode("mbcs", "replace").strip())
+
+
+def scheduled_scan_exists():
+    try:
+        r = subprocess.run(["schtasks", "/Query", "/TN", SCHED_TASK], capture_output=True, timeout=30,
+                           creationflags=NO_WINDOW)
+        return r.returncode == 0
+    except Exception:
         return False

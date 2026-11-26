@@ -30,3 +30,6 @@ desktop.ini
 
 # Nuitka
 nuitka-crash-report.xml
+
+# Eclipse Plus signing key (must never be committed)
+signing_key*

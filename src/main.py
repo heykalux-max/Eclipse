@@ -16,7 +16,7 @@ import traceback
 import uuid
 
 from PySide6.QtCore import (Qt, QTimer, QThread, Signal, QPropertyAnimation, QVariantAnimation,
-                            QEasingCurve, Property, QPointF, QRectF, QRect, QSize, QUrl, QPoint, QObject)
+                            QEasingCurve, Property, QPointF, QRectF, QRect, QSize, QUrl, QPoint, QObject, QTime)
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QLinearGradient, QRadialGradient,
                            QConicalGradient, QFont, QPainterPath, QIcon, QPixmap, QDesktopServices,
                            QFontMetrics, QGuiApplication, QRegion, QAction)
@@ -25,15 +25,16 @@ from PySide6.QtWidgets import (QApplication, QWidget, QFrame, QLabel, QPushButto
                                QScrollArea, QPlainTextEdit, QLineEdit, QFileDialog, QProgressBar,
                                QCheckBox, QSizePolicy, QMessageBox, QGraphicsDropShadowEffect,
                                QAbstractItemView, QDialog, QGraphicsOpacityEffect, QStyledItemDelegate, QStyle,
-                               QSystemTrayIcon, QMenu)
+                               QSystemTrayIcon, QMenu, QComboBox, QTimeEdit)
 
 import engine
 import sysmon
 import fullscan
 import ransomguard
+import plus
 
 APP_NAME = "ECLIPSE"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # --------------------------------------------------------------------------- #
 #  Percorsi
@@ -114,6 +115,7 @@ IC = {
     "quarantine": "", "undo": "", "key": "", "info": "", "radar": "",
     "cpu": "\uE9D9", "power": "\uE7E8", "net": "\uE968", "add": "\uE710", "remove": "\uE738",
     "flash": "\uE945", "drive": "\uEDA2", "play": "\uE768", "pause": "\uE769",
+    "star": "\uE735", "clock": "\uE823",
 }
 
 
@@ -164,6 +166,14 @@ def lbl(text="", size=10, color=None, weight=QFont.Weight.Normal, family=BODY, w
     return w
 
 
+def set_toggle(t, on):
+    """Changes a Toggle without firing its handlers."""
+    t.blockSignals(True)
+    t.setChecked(on)
+    t.setk(1.0 if on else 0.0)
+    t.blockSignals(False)
+
+
 def icon_lbl(glyph, size=14, color=None):
     w = QLabel(glyph)
     w.setFont(icon_font(size))
@@ -187,6 +197,13 @@ QLineEdit, QPlainTextEdit {{
     padding: 10px 12px; selection-background-color: {C['violet']}; color: {C['text']};
 }}
 QLineEdit:focus, QPlainTextEdit:focus {{ border: 1px solid {C['violet']}; background: rgba(124,58,237,14); }}
+QComboBox, QTimeEdit {{ background: rgba(255,255,255,5); border: 1px solid rgba(255,255,255,14);
+    border-radius: 10px; padding: 4px 12px; color: {C['text']}; min-width: 90px; }}
+QComboBox:focus, QTimeEdit:focus {{ border: 1px solid {C['violet']}; }}
+QComboBox::drop-down {{ border: none; width: 22px; }}
+QTimeEdit::up-button, QTimeEdit::down-button {{ width: 16px; border: none; }}
+QComboBox QAbstractItemView {{ background: {C['panel']}; border: 1px solid {C['border']}; color: {C['text']};
+    selection-background-color: rgba(124,58,237,90); outline: 0; }}
 QListWidget {{ background: transparent; border: none; outline: 0; }}
 QListWidget::item {{ border: 1px solid transparent; border-radius: 12px; margin: 2px 2px; }}
 QListWidget::item:hover {{ background: rgba(255,255,255,6); }}
@@ -2330,6 +2347,36 @@ class SettingsPage(QWidget):
         c3.lay.addLayout(kr)
         v.addWidget(c3)
 
+        c5 = HudCard(accent=C["violet"])
+        c5.lay.addWidget(section_title("Scheduled scan  ·  Plus", IC["clock"]))
+        c5.lay.addWidget(lbl("Runs a quick system scan automatically, even when Eclipse is closed "
+                             "(Windows Task Scheduler, no administrator rights needed).", 8.5, C["muted"], wrap=True))
+        sr = QHBoxLayout()
+        sr.setSpacing(10)
+        self.sc_freq = QComboBox()
+        for k, t in (("off", "Off"), ("daily", "Every day"), ("weekly", "Every week")):
+            self.sc_freq.addItem(t, k)
+        self.sc_day = QComboBox()
+        for k, t in zip(sysmon.SCHED_DAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+                                            "Sunday")):
+            self.sc_day.addItem(t, k)
+        self.sc_time = QTimeEdit()
+        self.sc_time.setDisplayFormat("HH:mm")
+        for w in (self.sc_freq, self.sc_day, self.sc_time):
+            w.setMinimumHeight(32)
+            sr.addWidget(w)
+        self.sc_apply = GlowButton("SAVE SCHEDULE", IC["save"], "primary")
+        self.sc_apply.clicked.connect(self.save_schedule)
+        self.sc_apply.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        sr.addWidget(self.sc_apply)
+        sr.addStretch()
+        c5.lay.addLayout(sr)
+        self.sc_state = lbl("", 8.5, C["dim"], wrap=True)
+        c5.lay.addWidget(self.sc_state)
+        self.sc_freq.currentIndexChanged.connect(
+            lambda _: self.sc_day.setVisible(self.sc_freq.currentData() == "weekly"))
+        v.addWidget(c5)
+
         c4 = HudCard(accent=C["green"])
         c4.lay.addWidget(section_title("Folders", IC["folder"]))
         c4.lay.addWidget(lbl(f"Install folder: {BASE}", 9, C["muted"], family=MONO, sel=True))
@@ -2351,6 +2398,40 @@ class SettingsPage(QWidget):
             t.toggled.connect(self.save)
         self.vt.editingFinished.connect(self.save)
         self.refresh_feed()
+        self.update_plus()
+
+    def update_plus(self):
+        s = self.main.store.settings
+        on = self.main.is_plus()
+        freq = s.get("sched_freq", "off") if on else "off"
+        self.sc_freq.setCurrentIndex(max(0, self.sc_freq.findData(freq)))
+        self.sc_day.setCurrentIndex(max(0, self.sc_day.findData(s.get("sched_day", "SUN"))))
+        self.sc_time.setTime(QTime.fromString(s.get("sched_time", "13:00"), "HH:mm"))
+        self.sc_day.setVisible(freq == "weekly")
+        if not on:
+            self.sc_state.setText("Available with Eclipse Plus.")
+        elif freq == "off":
+            self.sc_state.setText("No scheduled scan.")
+        else:
+            when = (f"every {self.sc_day.currentText()}" if freq == "weekly" else "every day") + \
+                   f" at {s.get('sched_time', '13:00')}"
+            ok = sysmon.scheduled_scan_exists()
+            self.sc_state.setText(f"Quick scan {when}." if ok else
+                                  f"Quick scan {when}, but the Windows task is missing: press Save schedule.")
+
+    def save_schedule(self):
+        if not self.main.require_plus("Scheduled scanning"):
+            self.update_plus()
+            return
+        s = self.main.store.settings
+        s["sched_freq"] = self.sc_freq.currentData()
+        s["sched_day"] = self.sc_day.currentData()
+        s["sched_time"] = self.sc_time.time().toString("HH:mm")
+        self.main.store.save_settings()
+        if self.main.apply_schedule():
+            self.main.toast("SCHEDULE SAVED", self.sc_freq.currentText() if s["sched_freq"] != "off"
+                            else "Scheduled scan turned off.", C["green"])
+        self.update_plus()
 
     def save(self):
         s = self.main.store.settings
@@ -2888,9 +2969,14 @@ class ProcessesPage(MonitorPage):
                               "(about 20 seconds)")
         self.b_mem.clicked.connect(self.memory_scan)
         bar.addWidget(self.b_mem)
+        self.update_plus()
+
+    def update_plus(self):
+        self.b_mem.setToolTip("Also inspect each process's memory for injected code and process hollowing "
+                              "(about 20 seconds)" + ("" if self.main.is_plus() else "  ·  Eclipse Plus feature"))
 
     def memory_scan(self):
-        if self.worker:
+        if self.worker or not self.main.require_plus("The process memory scan"):
             return
         self.with_memory = True
         self.refresh()
@@ -3282,9 +3368,9 @@ class ProtectionPage(QWidget):
         self.t_nt = Toggle(s.get("notify", True))
         self.t_tray = Toggle(s.get("tray_on_close", True))
         self.t_boot = Toggle(sysmon.get_self_startup())
-        self.t_rg = Toggle(s.get("ransom_guard", True))
-        for t, title, desc in ((self.t_rg, "Ransomware shield", "Decoy files + freezes any program that starts "
-                                "encrypting your documents."),
+        self.t_rg = Toggle(s.get("ransom_guard", True) and main.is_plus())
+        for t, title, desc in ((self.t_rg, "Ransomware shield  ·  PLUS", "Decoy files + freezes any program that "
+                                "starts encrypting your documents."),
                                (self.t_aq, "Auto-quarantine threats", "Dangerous files are isolated immediately."),
                                (self.t_nt, "Desktop notifications", "Windows alert when something is found."),
                                (self.t_tray, "Keep running in the tray", "Closing the window keeps protection on."),
@@ -3365,7 +3451,14 @@ class ProtectionPage(QWidget):
         else:
             self.main.stop_realtime()
 
+    def update_plus(self):
+        set_toggle(self.t_rg, self.main.store.settings.get("ransom_guard", True) and self.main.is_plus())
+        self.update_state()
+
     def toggle_rg(self, on):
+        if on and not self.main.require_plus("The ransomware shield"):
+            set_toggle(self.t_rg, False)
+            return
         self.main.store.settings["ransom_guard"] = on
         self.main.store.save_settings()
         if on and self.main.rt_worker is not None:
@@ -3417,6 +3510,132 @@ class ProtectionPage(QWidget):
             self.t_rt.setChecked(on)
             self.t_rt.setk(1.0 if on else 0.0)
             self.t_rt.blockSignals(False)
+
+
+# --------------------------------------------------------------------------- #
+#  Eclipse Plus
+# --------------------------------------------------------------------------- #
+class PlusPage(QWidget):
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
+        v.addWidget(page_header("Eclipse Plus", "Advanced protection on top of the free scanner"))
+
+        hero = HudCard(accent=C["violet"], pad=22)
+        hl = QHBoxLayout()
+        hl.setSpacing(20)
+        hl.addWidget(icon_lbl(IC["star"], 40, C["violet"]))
+        mid = QVBoxLayout()
+        mid.setSpacing(4)
+        self.state = lbl("", 20, C["text"], QFont.Weight.Bold, HEAD)
+        mid.addWidget(self.state)
+        self.state_sub = lbl("", 9.5, C["muted"], wrap=True)
+        mid.addWidget(self.state_sub)
+        hl.addLayout(mid, 1)
+        self.b_get = GlowButton("GET PLUS", IC["star"], "primary")
+        self.b_get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(plus.PLUS_URL)))
+        hl.addWidget(self.b_get, 0, Qt.AlignmentFlag.AlignVCenter)
+        hero.lay.addLayout(hl)
+        v.addWidget(hero)
+
+        fc = HudCard(accent=C["magenta"])
+        fc.lay.addWidget(section_title("What Plus adds", IC["shield"]))
+        self.feat_icons = []
+        for _, title, desc in plus.FEATURES:
+            row = QHBoxLayout()
+            row.setSpacing(14)
+            ic = icon_lbl(IC["lock"], 14, C["dim"])
+            ic.setFixedWidth(24)
+            self.feat_icons.append(ic)
+            row.addWidget(ic, 0, Qt.AlignmentFlag.AlignTop)
+            tv = QVBoxLayout()
+            tv.setSpacing(2)
+            tv.addWidget(lbl(title, 10.5, C["text"], QFont.Weight.DemiBold))
+            tv.addWidget(lbl(desc, 8.5, C["muted"], wrap=True))
+            row.addLayout(tv, 1)
+            fc.lay.addLayout(row)
+        fc.lay.addWidget(lbl("File, link and system scans, real-time protection, deobfuscation, AMSI, processes, "
+                             "startup and network monitoring stay free for everyone.", 8.5, C["dim"], wrap=True))
+        v.addWidget(fc)
+
+        kc = HudCard(accent=C["cyan"])
+        kc.lay.addWidget(section_title("License key", IC["key"]))
+        kc.lay.addWidget(lbl("After you subscribe you receive a key that starts with ECL1-. Paste it here: "
+                             "it is checked on this PC, nothing is sent online.", 8.5, C["muted"], wrap=True))
+        kr = QHBoxLayout()
+        self.key = QLineEdit()
+        self.key.setPlaceholderText("ECL1-...")
+        self.key.setFont(mkfont(9, family=MONO))
+        self.key.returnPressed.connect(self.activate)
+        kr.addWidget(self.key, 1)
+        self.b_act = GlowButton("ACTIVATE", IC["ok"], "primary")
+        self.b_act.clicked.connect(self.activate)
+        kr.addWidget(self.b_act)
+        self.b_rem = GlowButton("REMOVE KEY", IC["delete"], "ghost")
+        self.b_rem.clicked.connect(self.remove)
+        kr.addWidget(self.b_rem)
+        kc.lay.addLayout(kr)
+        self.key_msg = lbl("", 8.5, C["dim"], wrap=True)
+        kc.lay.addWidget(self.key_msg)
+        v.addWidget(kc)
+        v.addStretch()
+        self.refresh()
+
+    def refresh(self):
+        lic = self.main.lic
+        on = self.main.is_plus()
+        if on:
+            self.state.setText("PLUS ACTIVE")
+            self.state.setStyleSheet(f"color:{C['violet']}; background:transparent;")
+            left = lic.days_left()
+            extra = "" if left is None else f"  ·  {left} day{'s' if left != 1 else ''} left"
+            self.state_sub.setText(lic.describe() + extra)
+        elif lic.expired():
+            self.state.setText("PLUS EXPIRED")
+            self.state.setStyleSheet(f"color:{C['amber']}; background:transparent;")
+            self.state_sub.setText(lic.describe() + "  ·  renew your subscription and paste the new key below.")
+        else:
+            self.state.setText("FREE VERSION")
+            self.state.setStyleSheet(f"color:{C['text']}; background:transparent;")
+            self.state_sub.setText("Unlock the ransomware shield, the process memory scan and scheduled scans.")
+        for ic in self.feat_icons:
+            ic.setText(IC["ok"] if on else IC["lock"])
+            ic.setStyleSheet(f"color:{C['green'] if on else C['dim']}; background:transparent;")
+        self.b_get.tl.setText("RENEW" if lic.info else "GET PLUS")
+        self.b_get.setVisible(not on or (lic.days_left() is not None and lic.days_left() <= 7))
+        self.b_rem.setVisible(lic.info is not None)
+        if lic.error:
+            self.key_msg.setText("The saved key could not be used: " + lic.error)
+            self.key_msg.setStyleSheet(f"color:{C['red']}; background:transparent;")
+        else:
+            self.key_msg.setText("")
+
+    def activate(self):
+        text = self.key.text().strip()
+        if not text:
+            return
+        try:
+            info = self.main.lic.activate(text)
+        except (ValueError, OSError) as e:
+            self.key_msg.setText(str(e))
+            self.key_msg.setStyleSheet(f"color:{C['red']}; background:transparent;")
+            return
+        self.key.clear()
+        self.main.check_plus()
+        self.refresh()
+        self.main.toast("ECLIPSE PLUS ACTIVE", f"Thank you, {info['owner']}! The Plus features are unlocked.",
+                        C["violet"])
+
+    def remove(self):
+        if QMessageBox.question(self, "Remove key", "Remove the Plus key from this PC? The Plus features will "
+                                "turn off (you can paste the key again later).") != QMessageBox.StandardButton.Yes:
+            return
+        self.main.lic.deactivate()
+        self.main.check_plus()
+        self.refresh()
 
 
 # --------------------------------------------------------------------------- #
@@ -4310,6 +4529,8 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.store = Store()
+        self.lic = plus.License(DATA)
+        self._plus = self.lic.active()
         self.setWindowTitle("ECLIPSE - Threat Scanner")
         self.setWindowIcon(make_app_icon())
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
@@ -4347,7 +4568,8 @@ class MainWindow(QWidget):
                (IC["link"], "Link Scanner"),
                ("MONITOR", None), (IC["shield"], "Real-time"), (IC["cpu"], "Processes"), (IC["power"], "Startup"),
                (IC["net"], "Network"),
-               ("DATA", None), (IC["history"], "History"), (IC["lock"], "Quarantine"), (IC["settings"], "Settings")]
+               ("DATA", None), (IC["history"], "History"), (IC["lock"], "Quarantine"), (IC["settings"], "Settings"),
+               (IC["star"], "Eclipse Plus")]
         for g, t in NAV:
             if t is None:
                 h = lbl(g, 7.5, C["dim"], QFont.Weight.Bold, HEAD)
@@ -4370,7 +4592,7 @@ class MainWindow(QWidget):
         sh.addWidget(self.pulse_lbl)
         sh.addStretch()
         sv.addWidget(status)
-        ver = lbl(f"v{VERSION}", 8, C["dim"], family=MONO)
+        self.ver_lbl = ver = lbl("", 8, C["dim"], family=MONO)
         ver.setContentsMargins(24, 0, 0, 0)
         sv.addWidget(ver)
         body.addWidget(side)
@@ -4404,9 +4626,19 @@ class MainWindow(QWidget):
         self.procs = ProcessesPage(self)
         self.autoruns = StartupPage(self)
         self.net = NetworkPage(self)
+        self.plus_page = PlusPage(self)
         for pg in (self.dash, self.sysscan, self.files, self.links, self.prot, self.procs, self.autoruns, self.net,
-                   self.hist, self.quar, self.sett):
+                   self.hist, self.quar, self.sett, self.plus_page):
             self.stack.addWidget(pg)
+        self._update_badge()
+        lt = QTimer(self)                      # a subscription can lapse while Eclipse keeps running
+        lt.timeout.connect(self.check_plus)
+        lt.start(3600 * 1000)
+        if not self._plus:                     # decoys left by an earlier Plus session or an older version
+            QTimer.singleShot(3000, lambda: self.guard is None and self.stop_guard(remove_canaries=True))
+        if self.lic.expired():
+            QTimer.singleShot(2500, lambda: self.toast("PLUS EXPIRED", "Your Eclipse Plus subscription has ended. "
+                                                       "Renew it to get the Plus features back.", C["amber"]))
         self.fade = PageFade(area)
 
         self._pt = 0.0
@@ -4611,9 +4843,71 @@ class MainWindow(QWidget):
         self.prot.set_scanning("")
         self._rt_changed()
 
+    # ----------------------------------------------------------- Eclipse Plus
+    def is_plus(self):
+        return self._plus
+
+    def require_plus(self, feature):
+        """True if Plus is active; otherwise explains that the feature needs Plus and offers the Plus page."""
+        if self.is_plus():
+            return True
+        mb = QMessageBox(self)
+        mb.setWindowTitle("Eclipse Plus")
+        mb.setIcon(QMessageBox.Icon.Information)
+        mb.setText(f"{feature} is an Eclipse Plus feature.")
+        mb.setInformativeText("Eclipse Plus adds the ransomware shield, the process memory scan and scheduled "
+                              "scans. Everything else in Eclipse stays free." +
+                              ("\n\nYour subscription has expired: renew it to use this again."
+                               if self.lic.expired() else ""))
+        b_see = mb.addButton("See Eclipse Plus", QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton() is b_see:
+            self.go(self.stack.indexOf(self.plus_page))
+        return False
+
+    def check_plus(self):
+        """Re-reads the license; turns the Plus features on or off when the state changed."""
+        now = self.lic.active()
+        if now == self._plus:
+            return
+        self._plus = now
+        if now:
+            if self.rt_worker is not None and self.store.settings.get("ransom_guard", True):
+                self.start_guard()
+            self.apply_schedule(quiet=True)
+        else:
+            self.stop_guard(remove_canaries=True)
+            try:
+                sysmon.set_scheduled_scan("off")
+            except Exception:
+                pass
+            self.toast("PLUS ENDED", "The Plus features are now off. Renew Eclipse Plus to turn them back on.",
+                       C["amber"])
+        self._update_badge()
+        self.prot.update_plus()
+        self.procs.update_plus()
+        self.sett.update_plus()
+        self.plus_page.refresh()
+
+    def _update_badge(self):
+        self.ver_lbl.setText(f"v{VERSION}  ·  PLUS" if self._plus else f"v{VERSION}")
+        self.ver_lbl.setStyleSheet(f"color:{C['violet'] if self._plus else C['dim']}; background:transparent;")
+
+    def apply_schedule(self, quiet=False):
+        s = self.store.settings
+        freq = s.get("sched_freq", "off") if self.is_plus() else "off"
+        try:
+            sysmon.set_scheduled_scan(freq, s.get("sched_time", "13:00"), s.get("sched_day", "SUN"))
+        except Exception as e:
+            if not quiet:
+                self.toast("SCHEDULE NOT SAVED", str(e)[:150], C["red"])
+            return False
+        return True
+
     # ----------------------------------------------------------- ransomware shield
     def start_guard(self):
-        if self.guard is not None:
+        if self.guard is not None or not self.is_plus():
             return
         try:
             self.guard = ransomguard.RansomGuard(on_alert=self.guard_bridge.alert.emit).start()
@@ -4786,18 +5080,20 @@ def main():
     except Exception:
         pass
     tray_mode = "--tray" in sys.argv
-    show_evt = None
+    show_evt = scan_evt = None
     try:
         import ctypes
         k32 = ctypes.windll.kernel32
         tag = os.environ.get("ECLIPSE_INSTANCE_TAG", "")      # lets a test build run beside the real one
         k32.CreateMutexW(None, False, "Local\\Eclipse.ThreatScanner.Instance" + tag)
-        if k32.GetLastError() == 183:          # already running: ask it to show itself
-            h = k32.OpenEventW(0x0002, False, "Local\\Eclipse.ThreatScanner.Show" + tag)
+        if k32.GetLastError() == 183:          # already running: ask it to show itself (or to start the scan)
+            what = "Scan" if "--quick-scan" in sys.argv else "Show"
+            h = k32.OpenEventW(0x0002, False, "Local\\Eclipse.ThreatScanner." + what + tag)
             if h:
                 k32.SetEvent(h)
             return
         show_evt = k32.CreateEventW(None, False, False, "Local\\Eclipse.ThreatScanner.Show" + tag)
+        scan_evt = k32.CreateEventW(None, False, False, "Local\\Eclipse.ThreatScanner.Scan" + tag)
     except Exception:
         pass
     app = QApplication(sys.argv)
@@ -4814,6 +5110,8 @@ def main():
         def poll_show():
             if ctypes.windll.kernel32.WaitForSingleObject(show_evt, 0) == 0:
                 win.show_from_tray()
+            if scan_evt and ctypes.windll.kernel32.WaitForSingleObject(scan_evt, 0) == 0:
+                win.quick_scan()
         pt = QTimer(win)
         pt.timeout.connect(poll_show)
         pt.start(400)
