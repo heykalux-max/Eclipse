@@ -32,9 +32,10 @@ import sysmon
 import fullscan
 import ransomguard
 import plus
+import updater
 
 APP_NAME = "ECLIPSE"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # --------------------------------------------------------------------------- #
 #  Percorsi
@@ -229,7 +230,7 @@ class Store:
     DEFAULTS = {"use_defender": True, "check_signature": True, "online_dns": True,
                 "follow_redirects": False, "vt_key": "", "realtime": True, "watch_folders": [],
                 "auto_quarantine": False, "notify": True, "tray_on_close": True,
-                "ransom_guard": True, "use_amsi": True, "deobfuscate": True}
+                "ransom_guard": True, "use_amsi": True, "deobfuscate": True, "auto_update": True}
 
     def __init__(self):
         self.settings_path = os.path.join(DATA, "settings.json")
@@ -2377,6 +2378,24 @@ class SettingsPage(QWidget):
             lambda _: self.sc_day.setVisible(self.sc_freq.currentData() == "weekly"))
         v.addWidget(c5)
 
+        c6 = HudCard(accent=C["cyan"])
+        c6.lay.addWidget(section_title("Updates", IC["download"]))
+        self.t_upd = Toggle(s.get("auto_update", True))
+        c6.lay.addWidget(SettingRow("Check for updates automatically",
+                                    "Eclipse looks for a new version on GitHub at startup and twice a day. Updates are "
+                                    "digitally signed: a tampered download is refused.", self.t_upd))
+        ur = QHBoxLayout()
+        self.upd_state = lbl("", 9, C["muted"], family=MONO)
+        ur.addWidget(self.upd_state, 1)
+        self.b_check = GlowButton("CHECK NOW", IC["refresh"], "ghost")
+        self.b_check.clicked.connect(lambda: self.main.check_updates(manual=True))
+        ur.addWidget(self.b_check)
+        self.b_upd = GlowButton("UPDATE NOW", IC["download"], "primary")
+        self.b_upd.clicked.connect(lambda: self.main.start_update())
+        ur.addWidget(self.b_upd)
+        c6.lay.addLayout(ur)
+        v.addWidget(c6)
+
         c4 = HudCard(accent=C["green"])
         c4.lay.addWidget(section_title("Folders", IC["folder"]))
         c4.lay.addWidget(lbl(f"Install folder: {BASE}", 9, C["muted"], family=MONO, sel=True))
@@ -2394,11 +2413,19 @@ class SettingsPage(QWidget):
         v.addWidget(c4)
         v.addStretch()
 
-        for t in (self.t_def, self.t_sig, self.t_dns, self.t_red):
+        for t in (self.t_def, self.t_sig, self.t_dns, self.t_red, self.t_upd):
             t.toggled.connect(self.save)
         self.vt.editingFinished.connect(self.save)
         self.refresh_feed()
         self.update_plus()
+
+    def update_updates(self):
+        m = self.main
+        busy = getattr(m, "upd_worker", None) is not None
+        self.upd_state.setText(f"v{VERSION}  ·  " + getattr(m, "upd_status", ""))
+        self.b_check.setEnabled(not busy and bool(LAUNCHER))
+        self.b_upd.setVisible(bool(getattr(m, "upd_available", None)) and bool(LAUNCHER))
+        self.b_upd.setEnabled(not busy)
 
     def update_plus(self):
         s = self.main.store.settings
@@ -2440,6 +2467,7 @@ class SettingsPage(QWidget):
         s["online_dns"] = self.t_dns.isChecked()
         s["follow_redirects"] = self.t_red.isChecked()
         s["vt_key"] = self.vt.text().strip()
+        s["auto_update"] = self.t_upd.isChecked()
         self.main.store.save_settings()
         self.main.refresh_dashboard()
 
@@ -2489,6 +2517,31 @@ class CallWorker(QThread):
             self.done.emit(self.fn(*self.a, **self.kw))
         except Exception as e:
             self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class UpdateWorker(QThread):
+    """Checks for a new version, or downloads it, off the GUI thread."""
+    found = Signal(object)          # verified manifest or None
+    progress = Signal(int, int)
+    downloaded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, manifest=None):
+        super().__init__()
+        self.manifest = manifest
+        self.stop = False
+
+    def run(self):
+        try:
+            if self.manifest is None:
+                self.found.emit(updater.check(VERSION))
+            else:
+                self.downloaded.emit(updater.download(self.manifest, LAUNCHER, self.progress.emit,
+                                                      lambda: self.stop))
+        except updater.UpdateError as e:
+            self.failed.emit(str(e))
+        except Exception as e:
+            self.failed.emit(f"No connection to the update server ({type(e).__name__}).")
 
 
 class GuardBridge(QObject):
@@ -4634,6 +4687,20 @@ class MainWindow(QWidget):
         lt = QTimer(self)                      # a subscription can lapse while Eclipse keeps running
         lt.timeout.connect(self.check_plus)
         lt.start(3600 * 1000)
+        self.upd_worker = None
+        self.upd_available = None
+        self.upd_status = "Not checked yet" if LAUNCHER else "Running from source: update with git pull."
+        self.sett.update_updates()
+        if LAUNCHER and not _IS_WORKER:
+            import threading
+            threading.Thread(target=updater.cleanup, args=(LAUNCHER, VERSION), daemon=True).start()
+            QTimer.singleShot(20000, lambda: self.check_updates(manual=False))
+            ut = QTimer(self)
+            ut.timeout.connect(lambda: self.check_updates(manual=False))
+            ut.start(12 * 3600 * 1000)
+        if "--updated" in sys.argv:
+            QTimer.singleShot(1500, lambda: self.toast("ECLIPSE UPDATED", f"You are now on version {VERSION}.",
+                                                       C["green"]))
         if not self._plus:                     # decoys left by an earlier Plus session or an older version
             QTimer.singleShot(3000, lambda: self.guard is None and self.stop_guard(remove_canaries=True))
         if self.lic.expired():
@@ -4842,6 +4909,94 @@ class MainWindow(QWidget):
         self.stop_guard()
         self.prot.set_scanning("")
         self._rt_changed()
+
+    # ----------------------------------------------------------- updates
+    def check_updates(self, manual=True):
+        if self.upd_worker is not None or (not manual and not self.store.settings.get("auto_update", True)):
+            return
+        self.upd_status = "Checking for updates..."
+        self.sett.update_updates()
+        w = self.upd_worker = UpdateWorker()
+        w.found.connect(lambda m: self._update_checked(m, manual))
+        w.failed.connect(lambda e: self._update_failed(e, manual))
+        w.finished.connect(self._update_worker_done)
+        w.start()
+
+    def _update_worker_done(self):
+        self.upd_worker = None
+        self.sett.update_updates()
+
+    def _update_checked(self, m, manual):
+        self.upd_available = m
+        if not m:
+            self.upd_status = f"Eclipse is up to date  ·  checked {time.strftime('%H:%M')}"
+            if manual:
+                self.toast("UP TO DATE", f"You have the latest version ({VERSION}).", C["green"])
+            return
+        self.upd_status = f"Version {m['version']} is available"
+        if self.isVisible():
+            self.offer_update(m)
+        else:
+            self.notify("Eclipse update available", f"Version {m['version']} is ready: open Eclipse to install it.")
+
+    def _update_failed(self, err, manual):
+        self.upd_status = err
+        if manual:
+            self.toast("UPDATE CHECK FAILED", err[:150], C["amber"])
+
+    def offer_update(self, m):
+        mb = QMessageBox(self)
+        mb.setWindowTitle("Eclipse update")
+        mb.setIcon(QMessageBox.Icon.Information)
+        mb.setText(f"Eclipse {m['version']} is available (you have {VERSION}).")
+        size = f"{int(m['size']) / 1048576:.0f} MB"
+        mb.setInformativeText((m.get("notes") or "Improvements and fixes.") + f"\n\nDownload: {size}. Eclipse "
+                              "restarts by itself when the update is installed; your history, quarantine and "
+                              "settings are kept.")
+        b_now = mb.addButton("Update now", QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton() is b_now:
+            self.start_update(m)
+
+    def start_update(self, m=None):
+        m = m or self.upd_available
+        if not m or self.upd_worker is not None:
+            return
+        if not LAUNCHER:
+            self.toast("RUNNING FROM SOURCE", "Update the source code with git pull.", C["amber"])
+            return
+        if not updater.writable(os.path.dirname(LAUNCHER)):
+            self.toast("CANNOT UPDATE HERE", "Eclipse's folder is read-only: download the new version from GitHub.",
+                       C["amber"])
+            QDesktopServices.openUrl(QUrl("https://github.com/heykalux-max/Eclipse#download"))
+            return
+        if self.sysscan.worker is not None:
+            self.toast("SCAN IN PROGRESS", "Update after the system scan finishes.", C["amber"])
+            return
+        self.upd_status = "Downloading the update..."
+        self.sett.update_updates()
+        w = self.upd_worker = UpdateWorker(m)
+        w.progress.connect(self._update_progress)
+        w.downloaded.connect(self._update_downloaded)
+        w.failed.connect(lambda e: self._update_failed(e, True))
+        w.finished.connect(self._update_worker_done)
+        w.start()
+
+    def _update_progress(self, got, total):
+        self.upd_status = f"Downloading the update...  {got * 100 // max(total, 1)}%"
+        self.sett.upd_state.setText(self.upd_status)
+
+    def _update_downloaded(self, path):
+        try:
+            updater.install(path, LAUNCHER)
+            updater.restart(LAUNCHER, ["--updated"] + ([] if self.isVisible() else ["--tray"]))
+        except Exception as e:
+            self.upd_status = f"The update could not be installed: {e}"
+            self.toast("UPDATE FAILED", str(e)[:150], C["red"])
+            return
+        self.upd_status = "Restarting..."
+        self.quit_app()
 
     # ----------------------------------------------------------- Eclipse Plus
     def is_plus(self):
@@ -5072,6 +5227,31 @@ class MainWindow(QWidget):
         QApplication.instance().quit()
 
 
+def cli_update():
+    """Eclipse.exe --update: installs a newer version if there is one. Result in data\\update.log."""
+    def log(msg):
+        try:
+            with open(os.path.join(DATA, "update.log"), "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + msg + "\n")
+        except OSError:
+            pass
+    if not LAUNCHER:
+        log("running from source: use git pull")
+        return 2
+    try:
+        m = updater.check(VERSION)
+        if not m:
+            log(f"up to date ({VERSION})")
+            return 0
+        path = updater.download(m, LAUNCHER)
+        updater.install(path, LAUNCHER)
+        log(f"updated {VERSION} -> {m['version']}")
+        return 0
+    except Exception as e:
+        log(f"update failed: {e}")
+        return 1
+
+
 def main():
     sys.setswitchinterval(0.002)
     try:
@@ -5079,6 +5259,13 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Eclipse.ThreatScanner")
     except Exception:
         pass
+    if "--wait-pid" in sys.argv:                # started by the updater: let the old copy exit first
+        try:
+            updater.wait_for_pid(sys.argv[sys.argv.index("--wait-pid") + 1])
+        except (IndexError, ValueError):
+            pass
+    if "--update" in sys.argv:                  # command line: check, download and install, no window
+        sys.exit(cli_update())
     tray_mode = "--tray" in sys.argv
     show_evt = scan_evt = None
     try:

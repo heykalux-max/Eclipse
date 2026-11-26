@@ -6,6 +6,7 @@ Eclipse Plus key tool (for the seller only, not shipped in the exe).
   python tools\\license_tool.py issue "mario@example.com" --until 2027-12-31
   python tools\\license_tool.py issue "Mario Rossi" --lifetime
   python tools\\license_tool.py check ECL1-...             show what a key contains
+  python tools\\license_tool.py release --notes "..."       sign release/Eclipse.exe -> release/latest.json
 
 The PRIVATE key is kept in %USERPROFILE%\\.eclipse-plus\\signing_key.txt, outside the repository.
 Never commit it or share it: whoever has it can create unlimited Plus keys. Back it up somewhere
@@ -75,6 +76,24 @@ def cmd_issue(a):
           file=sys.stderr)
 
 
+def cmd_release(a):
+    """Writes the signed update manifest for release/Eclipse.exe (commit both files together)."""
+    import json
+    import updater
+    secret = load_secret()
+    if plus.public_from_secret(secret).hex() != plus.PUBLIC_KEY:
+        sys.exit("The signing key does not match PUBLIC_KEY in src/plus.py.")
+    version = re.search(r'^VERSION = "([^"]+)"', open(os.path.join(ROOT, "src", "main.py"), encoding="utf-8").read(),
+                        re.M).group(1)
+    exe = os.path.join(ROOT, "release", "Eclipse.exe")
+    m = updater.make_manifest(secret, version, exe, notes=a.notes)
+    updater.verify_manifest(m)
+    with open(os.path.join(ROOT, "release", "latest.json"), "w", encoding="utf-8") as f:
+        json.dump(m, f, indent=2)
+        f.write("\n")
+    print(f"release/latest.json: version {version}, {m['size']:,} bytes, sha256 {m['sha256'][:16]}...")
+
+
 def cmd_check(a):
     try:
         print(plus.parse_key(a.key))
@@ -92,6 +111,9 @@ g.add_argument("--months", type=int, default=1)
 g.add_argument("--until", help="YYYY-MM-DD")
 g.add_argument("--lifetime", action="store_true")
 p.set_defaults(fn=cmd_issue)
+p = sub.add_parser("release")
+p.add_argument("--notes", default="", help="short description of what changed")
+p.set_defaults(fn=cmd_release)
 p = sub.add_parser("check")
 p.add_argument("key")
 p.set_defaults(fn=cmd_check)

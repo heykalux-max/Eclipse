@@ -10,9 +10,11 @@ Open source threat scanner for Windows with a desktop interface (PySide6). It an
 
 ## Download
 
-**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.2.0)
+**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.3.0)
 
 A single file, no installation: put it in a folder of your choice and run it. The `data`, `Quarantine` and `Reports` folders are created next to the executable.
+
+**Automatic updates** (from version 1.3.0): Eclipse checks GitHub for a new version and installs it with one click, keeping your history, quarantine and settings. Updates are digitally signed, so a tampered download is refused. If you have version 1.2.0 or older, download the new version once by hand.
 
 > Windows SmartScreen may show "Windows protected your PC" because the executable is not digitally signed yet: click **More info → Run anyway**. If you prefer, you can build it yourself from source (see [Build](#build-single-executable)).
 
@@ -51,6 +53,7 @@ File analysis happens on your PC: files, quarantine and reports stay in the loca
 - **Phishing lists**: it downloads public lists of known phishing sites (OpenPhish, Phishing.Database).
 - **Link analysis**: it resolves the domain and contacts the site to follow redirects and read the page.
 - **Network**: reverse DNS lookups for active connections.
+- **Updates**: it downloads `release/latest.json` (and, when you accept an update, the new `Eclipse.exe`) from GitHub. Can be turned off in Settings.
 
 ## Running from source
 
@@ -72,6 +75,7 @@ Command-line options:
 |---|---|
 | `--tray` | start minimized to the notification area |
 | `--quick-scan` | start a quick system scan right away |
+| `--update` | install a newer version if there is one, without opening the window (result in `update.log` inside `data`) |
 
 ## Build (single executable)
 
@@ -83,6 +87,12 @@ pip install nuitka zstandard
 ```
 
 The executable is created in `dist\Eclipse.exe`. To keep intermediate files out of OneDrive, use `.\build.ps1 -BuildDir C:\temp\ecl`.
+
+### Publishing an update (maintainer)
+
+1. Raise `VERSION` in `src/main.py` (and `-Version` in `build.ps1`), build, copy the exe to `release/Eclipse.exe`.
+2. `python tools\license_tool.py release --notes "What changed"` signs it and writes `release/latest.json`.
+3. Commit and push `release/Eclipse.exe` and `release/latest.json` together. Users get the update within 12 hours.
 
 ## Project structure
 
@@ -97,7 +107,9 @@ The executable is created in `dist\Eclipse.exe`. To keep intermediate files out 
 | `src/memscan.py` | process memory scanner (injection, hollowing) |
 | `src/ransomguard.py` | anti-ransomware behaviour shield |
 | `src/plus.py` | Eclipse Plus license check (Ed25519 signed keys) |
-| `tools/license_tool.py` | issues Plus keys (needs the private signing key, which is not in the repository) |
+| `src/updater.py` | signed automatic updates |
+| `tools/license_tool.py` | issues Plus keys and signs releases (needs the private signing key, which is not in the repository) |
+| `release/latest.json` | signed description of the latest version, read by the updater |
 | `src/make_icon.py` | generates `eclipse.ico` / `eclipse.png` |
 | `release/Eclipse.exe` | latest compiled version, for direct download |
 

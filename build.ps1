@@ -4,7 +4,7 @@
 #       .\build.ps1 -BuildDir C:\temp\ecl   (file intermedi fuori da OneDrive)
 param(
     [string]$Python = "python",
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.3.0",
     [string]$BuildDir = "",
     [string]$DistDir = ""
 )
