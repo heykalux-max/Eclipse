@@ -30,6 +30,9 @@ try:
 except Exception:  # pragma: no cover
     pefile = None
 
+import amsi
+import deobf
+
 
 # --------------------------------------------------------------------------- #
 #  Self identity: Eclipse contains its own detection rules, so it would flag itself
@@ -357,7 +360,7 @@ STRING_RULES = [
      r"powershell[^\n]{0,80}\s-e(?:nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{40,}"),
     ("Execution", "PowerShell in hidden window", HIGH, r"-w(?:indowstyle)?\s+hidden|-w\s+h\b"),
     ("Execution", "In-memory download and execution (IEX)", CRIT,
-     r"\biex\s*\(|invoke-expression|downloadstring\(|\.downloaddata\("),
+     r"\biex\s*[\(\$]|invoke-expression|downloadstring\(|\.downloaddata\("),
     ("Execution", "Downloads files from the Internet", MED,
      r"downloadfile\(|invoke-webrequest|start-bitstransfer|urldownloadtofile"),
     ("Execution", "LOLBin abuse (certutil / bitsadmin / mshta / regsvr32)", HIGH,
@@ -803,6 +806,17 @@ class FileScanner:
         if ext in (".iso", ".img", ".vhd", ".vhdx"):
             res.add(MED, "Evasion", "Disk image (used to bypass Windows protections)", ext)
 
+        # hidden layers: decode and re-analyse what the script really runs
+        if ftype in ("SCRIPT", "TEXT", "LNK", "RTF") or ext in SCRIPT_EXT:
+            self._deobf_checks(text, res, signed, depth, "cmd" if ftype == "LNK" else deobf.lang_for(name))
+        # in-memory antivirus check (AMSI) of scripts and of files found inside archives
+        if ftype == "SCRIPT" or ext in SCRIPT_EXT:
+            self._amsi(text, res, name, "script")
+        elif depth > 0 and (ftype in ("PE", "LNK", "OLE", "RTF", "PDF") or ext in DANGEROUS_EXT):
+            self._amsi(data, res, name, "file inside the archive")
+        elif depth == 0 and ftype == "PE" and self.s.get("amsi_pe") and len(data) <= amsi.MAX_SCAN:
+            self._amsi(data, res, name, "executable")
+
         if ftype in ("UNKNOWN",) and len(data) > 4096:
             e = entropy(data[:4 * 1024 * 1024])
             res.meta.setdefault("entropy", round(e, 2))
@@ -1034,6 +1048,72 @@ class FileScanner:
         if len(re.findall(r"Chr[W$]?\(", src, re.I)) > 25:
             res.add(MED, "Obfuscation", "Obfuscated macro (character concatenation)")
         self._string_rules(src, res, False, True)
+        self._deobf_checks(src, res, False, 0, "vb")
+        self._amsi(src, res, "macro.vba", "VBA macro source")
+
+    # ---------------------------------------------------------------- deobfuscation / AMSI
+    def _amsi(self, content, res, name, what):
+        """Asks the Windows antivirus engine (AMSI) about content held in memory."""
+        if not self.s.get("use_amsi", True) or not content:
+            return
+        # neutral content name: Defender must not try to remediate a real path on its own
+        try:
+            st, _ = amsi.scan(content, f"Eclipse:{what}:{os.path.basename(str(name))[:80]}")
+        except Exception:
+            return
+        if st == "detected":
+            res.add(CRIT, "Defender", f"Windows antivirus engine (AMSI) detects the {what} as malware",
+                    str(name)[:200], 95)
+        elif st == "blocked":
+            res.add(HIGH, "Defender", f"The {what} is blocked by administrator policy (AMSI)", str(name)[:200], 35)
+
+    def _deobf_checks(self, text, res, signed, depth, lang="any"):
+        """Peels encoding layers and re-runs the rules on the code that would actually execute.
+        Only indicators that were NOT already visible in the original text count as revealed."""
+        if depth > 2 or not self.s.get("deobfuscate", True) or not deobf.worth_trying(text, lang):
+            return
+        try:
+            layers = deobf.deobfuscate(text, lang=lang)
+        except Exception:
+            return
+        if not layers:
+            return
+        seen_titles = {f.title for f in res.findings}
+        revealed, techniques, preview = 0, [], ""
+        for lay in layers:
+            tech = lay.technique
+            if tech not in techniques:
+                techniques.append(tech)
+            if lay.blob:
+                is_pe = lay.blob[:2] == b"MZ"
+                res.add(HIGH if is_pe else MED, "Payload",
+                        "Executable hidden in encoded form inside the script" if is_pe else
+                        "File hidden in encoded form inside the script", tech[:200], 40 if is_pe else 15)
+                child = ScanResult("file", "decoded payload", "decoded payload")
+                self._scan_bytes(lay.blob, "decoded.exe" if is_pe else "decoded.bin", child, depth + 1)
+                self._amsi(lay.blob, child, "decoded payload", "decoded payload")
+                for f in child.findings:
+                    if f.severity > INFO:
+                        res.add(f.severity, f.category, f.title, f"[decoded] {f.detail}".strip(), f.score)
+                revealed += 1
+                continue
+            tmp = ScanResult("file", "", "")
+            self._string_rules(lay.text, tmp, signed, True)
+            self._amsi(lay.text, tmp, "decoded script", "decoded script")
+            new = [f for f in tmp.findings if f.severity > INFO and f.title not in seen_titles]
+            if any(f.severity >= MED for f in new):
+                revealed += 1
+                if not preview:
+                    preview = re.sub(r"\s+", " ", lay.text).strip()[:300]
+            for f in new:
+                seen_titles.add(f.title)
+                res.add(f.severity, f.category, f.title, f"[decoded: {tech[:60]}] {f.detail}".strip(), f.score)
+        if revealed:
+            res.meta["deobfuscated"] = "; ".join(techniques)[:300]
+            if preview:
+                res.meta["decoded_code"] = preview
+            res.add(MED, "Obfuscation", "Malicious code hidden behind encoding (revealed by deobfuscation)",
+                    "; ".join(techniques)[:300], 20)
 
     # ---------------------------------------------------------------- PDF
     def _analyze_pdf(self, data, res):
@@ -1072,7 +1152,7 @@ class FileScanner:
 
     # ---------------------------------------------------------------- script
     def _analyze_script(self, text, res, ext):
-        if re.search(r"[A-Za-z0-9+/]{300,}={0,2}", text):
+        if re.search(r"[A-Za-z0-9+/]{300,}={0,2}", re.sub(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+", "", text)):
             res.add(MED, "Obfuscation", "Large embedded Base64 block (hidden payload)", "", 18)
         if len(re.findall(r"chr[w]?\s*\(\s*\d+", text, re.I)) > 25 or \
                 len(re.findall(r"\[char\]\s*\d+", text, re.I)) > 15:

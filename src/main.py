@@ -16,7 +16,7 @@ import traceback
 import uuid
 
 from PySide6.QtCore import (Qt, QTimer, QThread, Signal, QPropertyAnimation, QVariantAnimation,
-                            QEasingCurve, Property, QPointF, QRectF, QRect, QSize, QUrl, QPoint)
+                            QEasingCurve, Property, QPointF, QRectF, QRect, QSize, QUrl, QPoint, QObject)
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QLinearGradient, QRadialGradient,
                            QConicalGradient, QFont, QPainterPath, QIcon, QPixmap, QDesktopServices,
                            QFontMetrics, QGuiApplication, QRegion, QAction)
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QFrame, QLabel, QPushButto
 import engine
 import sysmon
 import fullscan
+import ransomguard
 
 APP_NAME = "ECLIPSE"
 VERSION = "1.1.0"
@@ -210,7 +211,8 @@ QMessageBox QPushButton {{ background: {C['panel2']}; border: 1px solid {C['cyan
 class Store:
     DEFAULTS = {"use_defender": True, "check_signature": True, "online_dns": True,
                 "follow_redirects": False, "vt_key": "", "realtime": True, "watch_folders": [],
-                "auto_quarantine": False, "notify": True, "tray_on_close": True}
+                "auto_quarantine": False, "notify": True, "tray_on_close": True,
+                "ransom_guard": True, "use_amsi": True, "deobfuscate": True}
 
     def __init__(self):
         self.settings_path = os.path.join(DATA, "settings.json")
@@ -1498,7 +1500,8 @@ class ResultDetail(HudCard):
             if it.widget():
                 it.widget().deleteLater()
         keys = ["type", "format", "size", "signature", "defender", "virustotal", "company", "origin",
-                "document", "sha256", "registered_domain", "ip", "http", "page_title", "redirect", "pdf"]
+                "document", "deobfuscated", "decoded_code", "sha256", "registered_domain", "ip", "http",
+                "page_title", "redirect", "pdf"]
         row = 0
         for k in keys:
             if k in res.meta and res.meta[k] not in ("", None):
@@ -2407,6 +2410,11 @@ class CallWorker(QThread):
             self.failed.emit(f"{type(e).__name__}: {e}")
 
 
+class GuardBridge(QObject):
+    """Carries ransomware-shield alerts from its watcher threads to the GUI thread."""
+    alert = Signal(object)
+
+
 class RealtimeWorker(QThread):
     """Watches folders and scans every new file once it has finished downloading."""
     detected = Signal(object)
@@ -2868,9 +2876,34 @@ class ProcessesPage(MonitorPage):
     SUB = "Programs running right now: where a RAT that is already installed hides"
     GLYPH = IC["cpu"]
     EMPTY = ("SELECT A PROCESS", "Pick a process to see its location, signature, command line and network activity.")
-    KEYS = ["pid", "path", "signature", "parent", "user", "started", "memory", "connections", "command"]
+    KEYS = ["pid", "path", "signature", "parent", "user", "started", "memory", "memory_scan", "connections",
+            "command"]
     FILTERS = (("all", "ALL"), ("flag", "FLAGGED"), ("unsigned", "UNSIGNED"), ("net", "ONLINE"))
     NOUN = "processes"
+    with_memory = False
+
+    def extra_bar(self, bar):
+        self.b_mem = GlowButton("MEMORY SCAN", IC["search"], "ghost")
+        self.b_mem.setToolTip("Also inspect each process's memory for injected code and process hollowing "
+                              "(about 20 seconds)")
+        self.b_mem.clicked.connect(self.memory_scan)
+        bar.addWidget(self.b_mem)
+
+    def memory_scan(self):
+        if self.worker:
+            return
+        self.with_memory = True
+        self.refresh()
+
+    def _finish(self):
+        super()._finish()
+        self.with_memory = False
+        self.b_mem.setEnabled(True)
+
+    def refresh(self, quiet=False):
+        if not self.worker and not quiet:
+            self.b_mem.setEnabled(False)
+        super().refresh(quiet)
 
     def build_buttons(self, lay):
         self.b_deep = GlowButton("DEEP SCAN", IC["search"], "ghost")
@@ -2886,7 +2919,7 @@ class ProcessesPage(MonitorPage):
         lay.addWidget(self.b_kill)
 
     def job(self, step):
-        return sysmon.scan_processes(self.main.flagged_paths(), step)
+        return sysmon.scan_processes(self.main.flagged_paths(), step, memory=self.with_memory)
 
     def key(self, r):
         return r.meta.get("pid")
@@ -3249,7 +3282,10 @@ class ProtectionPage(QWidget):
         self.t_nt = Toggle(s.get("notify", True))
         self.t_tray = Toggle(s.get("tray_on_close", True))
         self.t_boot = Toggle(sysmon.get_self_startup())
-        for t, title, desc in ((self.t_aq, "Auto-quarantine threats", "Dangerous files are isolated immediately."),
+        self.t_rg = Toggle(s.get("ransom_guard", True))
+        for t, title, desc in ((self.t_rg, "Ransomware shield", "Decoy files + freezes any program that starts "
+                                "encrypting your documents."),
+                               (self.t_aq, "Auto-quarantine threats", "Dangerous files are isolated immediately."),
                                (self.t_nt, "Desktop notifications", "Windows alert when something is found."),
                                (self.t_tray, "Keep running in the tray", "Closing the window keeps protection on."),
                                (self.t_boot, "Start with Windows", "Launch Eclipse silently in the tray at login.")):
@@ -3271,6 +3307,7 @@ class ProtectionPage(QWidget):
         for t in (self.t_aq, self.t_nt, self.t_tray):
             t.toggled.connect(self.save)
         self.t_boot.toggled.connect(self.toggle_boot)
+        self.t_rg.toggled.connect(self.toggle_rg)
         self.checked = 0
         self.blocked = 0
         self.reload_folders()
@@ -3328,6 +3365,15 @@ class ProtectionPage(QWidget):
         else:
             self.main.stop_realtime()
 
+    def toggle_rg(self, on):
+        self.main.store.settings["ransom_guard"] = on
+        self.main.store.save_settings()
+        if on and self.main.rt_worker is not None:
+            self.main.start_guard()
+        elif not on:
+            self.main.stop_guard(remove_canaries=True)
+        self.update_state()
+
     def toggle_boot(self, on):
         try:
             sysmon.set_self_startup(on)
@@ -3357,9 +3403,11 @@ class ProtectionPage(QWidget):
         if on:
             self.state.setText("PROTECTION ACTIVE")
             self.state.setStyleSheet(f"color:{C['green']}; background:transparent;")
+            g = getattr(self.main, "guard", None)
+            shield = f"  ·  ransomware shield on ({len(g.folders)} folders)" if g else ""
             self.state_sub.setText(f"Watching {n} folder{'s' if n != 1 else ''}  ·  {self.checked} new file"
                                    f"{'s' if self.checked != 1 else ''} checked this session  ·  "
-                                   f"{self.blocked} flagged")
+                                   f"{self.blocked} flagged{shield}")
         else:
             self.state.setText("PROTECTION OFF")
             self.state.setStyleSheet(f"color:{C['amber']}; background:transparent;")
@@ -4347,6 +4395,9 @@ class MainWindow(QWidget):
         self.quar = QuarantinePage(self)
         self.sett = SettingsPage(self)
         self.rt_worker = None
+        self.guard = None
+        self.guard_bridge = GuardBridge()
+        self.guard_bridge.alert.connect(self.on_guard_alert)
         self.rt_ignore = set()
         self._quitting = False
         self.prot = ProtectionPage(self)
@@ -4547,6 +4598,8 @@ class MainWindow(QWidget):
         self.rt_worker.detected.connect(self.on_realtime)
         self.rt_worker.scanning.connect(self.prot.set_scanning)
         self.rt_worker.start()
+        if self.store.settings.get("ransom_guard", True):
+            self.start_guard()
         self._rt_changed()
 
     def stop_realtime(self):
@@ -4554,8 +4607,91 @@ class MainWindow(QWidget):
         if w is not None:
             w.stop = True
             w.wait(4000)
+        self.stop_guard()
         self.prot.set_scanning("")
         self._rt_changed()
+
+    # ----------------------------------------------------------- ransomware shield
+    def start_guard(self):
+        if self.guard is not None:
+            return
+        try:
+            self.guard = ransomguard.RansomGuard(on_alert=self.guard_bridge.alert.emit).start()
+        except Exception as e:
+            self.guard = None
+            self.toast("RANSOMWARE SHIELD", f"Could not start: {str(e)[:120]}", C["amber"])
+
+    def stop_guard(self, remove_canaries=False):
+        g, self.guard = self.guard, None
+        if g is not None:
+            g.stop(remove_canaries=remove_canaries)
+        elif remove_canaries:   # shield already off: still clean up the decoys it planted earlier
+            tmp = ransomguard.RansomGuard(canaries=False)
+            for d in tmp.folders:
+                for n in ransomguard.CANARY_NAMES:
+                    tmp.canaries[os.path.normcase(os.path.join(d, n))] = ""
+            tmp.remove_canaries()
+
+    def on_guard_alert(self, info):
+        name = info.get("name") or "Unknown program"
+        # stored as a "file" result pointing at the culprit's executable, so the detail view can open/quarantine it
+        r = engine.ScanResult("file", info.get("exe") or name, name)
+        r.meta.update({"type": "Ransomware shield alert",
+                       "origin": ("frozen by the ransomware shield" if info.get("suspended") else "alert only")
+                                 + (f"  ·  PID {info['pid']}" if info.get("pid") else ""),
+                       "document": info.get("cmdline", "")})
+        r.add(engine.CRIT, "Ransomware", "Ransomware behaviour: " + info["reason"],
+              "; ".join(os.path.basename(f) for f in info.get("files", [])[:8]), 90)
+        if info.get("evidence"):
+            r.add(engine.HIGH if info.get("pid") else engine.INFO, "Ransomware", "Why this process",
+                  "; ".join(info["evidence"]))
+        r.finalize()
+        self.store.add(r)
+        self.store.save_history()
+        self.prot.add_event(r)
+        self.toast("RANSOMWARE BLOCKED" if info.get("suspended") else "RANSOMWARE ACTIVITY",
+                   f"{name}  ·  {info['reason'][:80]}", C["red"])
+        self.notify("Eclipse: ransomware activity", f"{name}\n{info['reason'][:150]}", True)
+        self.show_from_tray()
+        mb = QMessageBox(self)
+        mb.setIcon(QMessageBox.Icon.Critical)
+        mb.setWindowTitle("Ransomware shield")
+        files = "\n".join("  " + f for f in info.get("files", [])[:6])
+        if info.get("suspended"):
+            mb.setText(f"Eclipse FROZE {name} (PID {info['pid']}): it was encrypting or destroying your files.")
+            mb.setInformativeText(f"{info['reason']}\n\nProgram: {info.get('exe')}\n\nFiles touched:\n{files}\n\n"
+                                  "Terminate it unless you are sure it is a program you trust.")
+            b_kill = mb.addButton("Terminate", QMessageBox.ButtonRole.DestructiveRole)
+            b_res = mb.addButton("It's safe, resume it", QMessageBox.ButtonRole.RejectRole)
+            mb.addButton("Keep frozen", QMessageBox.ButtonRole.AcceptRole)
+            mb.exec()
+            if mb.clickedButton() is b_kill:
+                try:
+                    sysmon.kill_process(info["pid"])
+                    self.toast("PROCESS TERMINATED", name, C["green"])
+                    if info.get("exe") and os.path.isfile(info["exe"]):
+                        self.go(self.stack.indexOf(self.files))
+                        self.files.start([info["exe"]])
+                except Exception as e:
+                    self.toast("COULD NOT TERMINATE", str(e)[:150], C["red"])
+            elif mb.clickedButton() is b_res:
+                try:
+                    ransomguard.resume(info["pid"])
+                    if self.guard:
+                        self.guard.ignored.add(info["pid"])
+                    self.toast("PROCESS RESUMED", name, C["amber"])
+                except Exception as e:
+                    self.toast("COULD NOT RESUME", str(e)[:150], C["red"])
+        else:
+            who = (f"Most likely: {info['name']} (PID {info['pid']}) - it is an installed program, so Eclipse did "
+                   f"not freeze it automatically." if info.get("pid") else
+                   "Eclipse could not identify the program with certainty"
+                   + (f" (possible suspect: {info['suspect']})." if info.get("suspect") else "."))
+            mb.setText("Eclipse detected ransomware-like activity on your files.")
+            mb.setInformativeText(f"{info['reason']}\n\n{who}\n\nFiles:\n{files}\n\n"
+                                  "Close any program you don't recognise and run a Quick system scan.")
+            mb.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            mb.exec()
 
     def restart_realtime(self):
         if self.rt_worker is not None:

@@ -19,6 +19,8 @@ import winreg
 
 import psutil
 
+import amsi
+import deobf
 import engine
 from engine import INFO, LOW, MED, HIGH, CRIT, ScanResult, NO_WINDOW
 
@@ -271,12 +273,12 @@ ENC_RE = re.compile(r"\s-(e|ec|en|enc|enco|encod|encode|encoded|encodedc\w*)\s+[
 B64_RE = re.compile(r"[A-Za-z0-9+/]{180,}={0,2}")
 
 
-def command_findings(cmd):
+def command_findings(cmd, _host=None, _depth=0):
     """Indicators in a command line launched through a script host / LOLBin."""
     if not cmd:
         return []
     c = cmd.lower()
-    host = os.path.basename(exe_from_command(cmd)).lower()
+    host = _host or os.path.basename(exe_from_command(cmd)).lower()
     f = []
     if host not in LOLBINS:
         return f
@@ -325,7 +327,39 @@ def command_findings(cmd):
         f.append((MED, "Network", "Command line contains an internet address", short(cmd)))
     if B64_RE.search(cmd) and not any("Encoded" in x[2] for x in f):
         f.append((MED, "Obfuscation", "Long Base64 blob in the command line", short(cmd)))
+    lang = "ps" if host in ("powershell.exe", "pwsh.exe") else "bat" if host == "cmd.exe" else "any"
+    if _depth < 2 and deobf.worth_trying(cmd, lang):
+        f += _decoded_command_findings(cmd, host, _depth, lang)
     return f
+
+
+def _decoded_command_findings(cmd, host, depth, lang):
+    """Decodes -EncodedCommand / Base64 / char-code layers and scores what really runs."""
+    out = []
+    try:
+        layers = deobf.deobfuscate(cmd, max_layers=3, lang=lang)
+    except Exception:
+        return out
+    for lay in layers:
+        if lay.blob:
+            if lay.blob[:2] == b"MZ":
+                out.append((CRIT, "Payload", "Command line carries an encoded executable", lay.technique))
+            continue
+        code = lay.text.strip()
+        if not code:
+            continue
+        inner = command_findings(code, host, depth + 1)
+        tmp = ScanResult("process", "", "")
+        engine.FileScanner({"use_amsi": False, "deobfuscate": False})._string_rules(code, tmp, False, True)
+        inner += [(x.severity, x.category, x.title, x.detail) for x in tmp.findings if x.severity > INFO]
+        st, _ = amsi.scan(code, "Eclipse:decoded command line")
+        if st == "detected":
+            inner.append((CRIT, "Defender", "Windows antivirus engine (AMSI) detects the decoded command as malware",
+                          short(code, 160)))
+        if inner:
+            out.append((MED, "Obfuscation", f"Hidden command decoded ({lay.technique[:60]})", short(code, 300)))
+            out += [(s, cat, t, f"[decoded] {d}") for s, cat, t, d in inner]
+    return out
 
 
 def short(s, n=240):
@@ -503,7 +537,44 @@ def profile_process(info, sig, names, flagged):
     return r.finalize()
 
 
-def scan_processes(flagged=None, step=None):
+def memory_findings(results, step=None):
+    """Adds the process-memory inspection (injected code, hollowing) to already scored processes."""
+    import memscan
+    by_pid = {r.meta.get("pid"): r for r in results}
+    todo = [r for r in results if r.meta.get("pid") not in (0, 4, None) and r.meta.get("path")
+            and nc(r.meta.get("path")) not in OWN_EXE and r.meta.get("pid") != os.getpid()]
+    denied = 0
+    for i, r in enumerate(todo):
+        if step and i % 8 == 0:
+            step(f"Inspecting process memory ({i}/{len(todo)})")
+        pid = r.meta["pid"]
+        try:
+            tids = [t.id for t in psutil.Process(pid).threads()]
+        except Exception:
+            tids = []
+        try:
+            f, st = memscan.scan_process(pid, r.meta.get("path"), r.name, tids)
+        except Exception as e:
+            f, st = [], "error"
+        if st == "denied":
+            denied += 1
+            r.meta["memory_scan"] = "not inspected (run Eclipse as administrator)"
+            continue
+        if st != "ok":
+            continue
+        apply(r, [x for x in f if x[0] > INFO])
+        bad = [x for x in f if x[0] >= MED]
+        r.meta["memory_scan"] = (f"{len(bad)} anomal{'ies' if len(bad) != 1 else 'y'} found" if bad
+                                 else "no injected code found")
+        r.finalize()
+    for r in results:
+        if r.meta.get("pid") in by_pid and "memory_scan" not in r.meta and r.meta.get("pid") not in (0, 4):
+            r.meta.setdefault("memory_scan", "not inspected")
+    results.sort(key=lambda r: (-r.score, r.name.lower()))
+    return denied
+
+
+def scan_processes(flagged=None, step=None, memory=False):
     flagged = flagged or {}
     if step:
         step("Listing processes")
@@ -540,6 +611,8 @@ def scan_processes(flagged=None, step=None):
             r.finalize()
         out.append(r)
     out.sort(key=lambda r: (-r.score, r.name.lower()))
+    if memory:
+        memory_findings(out, step)
     return out
 
 

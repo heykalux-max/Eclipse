@@ -20,8 +20,11 @@ A single file, no installation: put it in a folder of your choice and run it. Th
 
 - **File and link scanning**: heuristic analysis of PE executables, scripts, archives and documents, with a SAFE / SUSPICIOUS / DANGEROUS verdict and an explanation of the reasons.
 - **System Scan**: Quick, Full or Custom scan of the PC, multi-process, with caching and digital signature verification (Authenticode) to reduce false positives.
+- **Script deobfuscation**: unpacks Base64 / `-EncodedCommand`, gzip/deflate, string concatenation, char codes, escapes, reversed strings and variable tricks in PowerShell, batch, VBScript, JavaScript and macros, then re-analyzes the hidden code.
+- **AMSI scanning**: scripts, macros, decoded payloads and files inside archives are also checked in memory by the installed antivirus through the Windows Antimalware Scan Interface.
 - **Real-time protection**: monitoring of high-risk folders (Downloads, Desktop, Temp…).
-- **Processes**: list of running processes with analysis and the option to terminate them.
+- **Ransomware shield**: decoy files and burst detection in Documents, Desktop and Pictures; a program that starts encrypting or destroying files is frozen and you choose whether to terminate it.
+- **Processes**: list of running processes with analysis and the option to terminate them. **Memory scan** looks for injected code, threads started from unbacked memory and process hollowing.
 - **Startup**: review of startup entries (registry, Startup folders, scheduled tasks).
 - **Network**: active connections per process, with reverse DNS and suspicious ports.
 - **Quarantine and exportable reports**.
@@ -75,6 +78,10 @@ The executable is created in `dist\Eclipse.exe`. To keep intermediate files out 
 | `src/engine.py` | file and link analysis engine |
 | `src/fullscan.py` | System Scan (multi-process, caching, false-positive policy) |
 | `src/sysmon.py` | processes, network, startup, digital signatures |
+| `src/deobf.py` | script deobfuscation (normalisers and decoders) |
+| `src/amsi.py` | Windows AMSI in-memory scanning |
+| `src/memscan.py` | process memory scanner (injection, hollowing) |
+| `src/ransomguard.py` | anti-ransomware behaviour shield |
 | `src/make_icon.py` | generates `eclipse.ico` / `eclipse.png` |
 | `release/Eclipse.exe` | latest compiled version, for direct download |
 
