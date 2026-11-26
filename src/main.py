@@ -35,7 +35,7 @@ import plus
 import updater
 
 APP_NAME = "ECLIPSE"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # --------------------------------------------------------------------------- #
 #  Percorsi
@@ -3587,10 +3587,19 @@ class PlusPage(QWidget):
         mid.addWidget(self.state)
         self.state_sub = lbl("", 9.5, C["muted"], wrap=True)
         mid.addWidget(self.state_sub)
+        self.price = lbl(f"{plus.PRICE}  ·  cancel anytime  ·  first {plus.TRIAL_DAYS} days free", 9, C["violet"],
+                         QFont.Weight.DemiBold)
+        mid.addWidget(self.price)
         hl.addLayout(mid, 1)
-        self.b_get = GlowButton("GET PLUS", IC["star"], "primary")
+        bv = QVBoxLayout()
+        bv.setSpacing(8)
+        self.b_trial = GlowButton(f"START {plus.TRIAL_DAYS}-DAY FREE TRIAL", IC["play"], "primary")
+        self.b_trial.clicked.connect(self.start_trial)
+        bv.addWidget(self.b_trial)
+        self.b_get = GlowButton("GET PLUS", IC["star"], "ghost")
         self.b_get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(plus.PLUS_URL)))
-        hl.addWidget(self.b_get, 0, Qt.AlignmentFlag.AlignVCenter)
+        bv.addWidget(self.b_get)
+        hl.addLayout(bv)
         hero.lay.addLayout(hl)
         v.addWidget(hero)
 
@@ -3640,12 +3649,17 @@ class PlusPage(QWidget):
     def refresh(self):
         lic = self.main.lic
         on = self.main.is_plus()
+        trial = lic.kind() == "trial"
         if on:
-            self.state.setText("PLUS ACTIVE")
+            self.state.setText("FREE TRIAL ACTIVE" if trial else "PLUS ACTIVE")
             self.state.setStyleSheet(f"color:{C['violet']}; background:transparent;")
             left = lic.days_left()
             extra = "" if left is None else f"  ·  {left} day{'s' if left != 1 else ''} left"
             self.state_sub.setText(lic.describe() + extra)
+        elif lic.trial_ended() and not lic.info:
+            self.state.setText("FREE TRIAL ENDED")
+            self.state.setStyleSheet(f"color:{C['amber']}; background:transparent;")
+            self.state_sub.setText("Subscribe to keep the ransomware shield, the memory scan and scheduled scans.")
         elif lic.expired():
             self.state.setText("PLUS EXPIRED")
             self.state.setStyleSheet(f"color:{C['amber']}; background:transparent;")
@@ -3653,18 +3667,27 @@ class PlusPage(QWidget):
         else:
             self.state.setText("FREE VERSION")
             self.state.setStyleSheet(f"color:{C['text']}; background:transparent;")
-            self.state_sub.setText("Unlock the ransomware shield, the process memory scan and scheduled scans.")
+            self.state_sub.setText(f"Unlock the ransomware shield, the process memory scan and scheduled scans. "
+                                   f"Try it free for {plus.TRIAL_DAYS} days.")
         for ic in self.feat_icons:
             ic.setText(IC["ok"] if on else IC["lock"])
             ic.setStyleSheet(f"color:{C['green'] if on else C['dim']}; background:transparent;")
-        self.b_get.tl.setText("RENEW" if lic.info else "GET PLUS")
-        self.b_get.setVisible(not on or (lic.days_left() is not None and lic.days_left() <= 7))
+        self.b_get.tl.setText("RENEW" if lic.info else "SUBSCRIBE" if lic.trial_used() else "GET PLUS")
+        self.b_get.setVisible(not on or trial or (lic.days_left() is not None and lic.days_left() <= 7))
+        self.b_trial.setVisible(not lic.trial_used() and not lic.info)
+        self.price.setVisible(lic.kind() != "key")
+        if lic.trial_used():
+            self.price.setText(f"{plus.PRICE}  ·  cancel anytime")
         self.b_rem.setVisible(lic.info is not None)
         if lic.error:
             self.key_msg.setText("The saved key could not be used: " + lic.error)
             self.key_msg.setStyleSheet(f"color:{C['red']}; background:transparent;")
         else:
             self.key_msg.setText("")
+
+    def start_trial(self):
+        self.main.start_trial()
+        self.refresh()
 
     def activate(self):
         text = self.key.text().strip()
@@ -4706,6 +4729,11 @@ class MainWindow(QWidget):
         if self.lic.expired():
             QTimer.singleShot(2500, lambda: self.toast("PLUS EXPIRED", "Your Eclipse Plus subscription has ended. "
                                                        "Renew it to get the Plus features back.", C["amber"]))
+        elif self.lic.trial_ended() and not self.store.settings.get("trial_end_seen"):
+            self.store.settings["trial_end_seen"] = True
+            self.store.save_settings()
+            QTimer.singleShot(2500, lambda: self.toast("FREE TRIAL ENDED", f"Subscribe to Eclipse Plus for "
+                                                       f"{plus.PRICE} to keep the Plus features.", C["amber"]))
         self.fade = PageFade(area)
 
         self._pt = 0.0
@@ -5010,16 +5038,32 @@ class MainWindow(QWidget):
         mb.setWindowTitle("Eclipse Plus")
         mb.setIcon(QMessageBox.Icon.Information)
         mb.setText(f"{feature} is an Eclipse Plus feature.")
-        mb.setInformativeText("Eclipse Plus adds the ransomware shield, the process memory scan and scheduled "
-                              "scans. Everything else in Eclipse stays free." +
-                              ("\n\nYour subscription has expired: renew it to use this again."
-                               if self.lic.expired() else ""))
-        b_see = mb.addButton("See Eclipse Plus", QMessageBox.ButtonRole.AcceptRole)
+        trial = not self.lic.trial_used() and not self.lic.info
+        extra = ("\n\nYour subscription has expired: renew it to use this again." if self.lic.expired() else
+                 "\n\nYour free trial has ended." if self.lic.trial_ended() else
+                 f"\n\nTry everything free for {plus.TRIAL_DAYS} days, no payment needed." if trial else "")
+        mb.setInformativeText(f"Eclipse Plus ({plus.PRICE}) adds the ransomware shield, the process memory scan and "
+                              f"scheduled scans. Everything else in Eclipse stays free." + extra)
+        b_trial = mb.addButton(f"Start {plus.TRIAL_DAYS}-day free trial", QMessageBox.ButtonRole.AcceptRole) \
+            if trial else None
+        b_see = mb.addButton("See Eclipse Plus", QMessageBox.ButtonRole.ActionRole)
         mb.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
         mb.exec()
+        if b_trial is not None and mb.clickedButton() is b_trial:
+            return self.start_trial()
         if mb.clickedButton() is b_see:
             self.go(self.stack.indexOf(self.plus_page))
         return False
+
+    def start_trial(self):
+        try:
+            self.lic.start_trial()
+        except (ValueError, OSError) as e:
+            self.toast("TRIAL NOT AVAILABLE", str(e)[:150], C["amber"])
+            return False
+        self.check_plus()
+        self.toast("FREE TRIAL STARTED", f"Eclipse Plus is unlocked for {plus.TRIAL_DAYS} days. Enjoy!", C["violet"])
+        return self.is_plus()
 
     def check_plus(self):
         """Re-reads the license; turns the Plus features on or off when the state changed."""
@@ -5037,8 +5081,14 @@ class MainWindow(QWidget):
                 sysmon.set_scheduled_scan("off")
             except Exception:
                 pass
-            self.toast("PLUS ENDED", "The Plus features are now off. Renew Eclipse Plus to turn them back on.",
-                       C["amber"])
+            if self.lic.trial_ended() and not self.lic.info:
+                self.store.settings["trial_end_seen"] = True
+                self.store.save_settings()
+                self.toast("FREE TRIAL ENDED", f"The Plus features are now off. Subscribe for {plus.PRICE} to "
+                           "keep them.", C["amber"])
+            else:
+                self.toast("PLUS ENDED", "The Plus features are now off. Renew Eclipse Plus to turn them back on.",
+                           C["amber"])
         self._update_badge()
         self.prot.update_plus()
         self.procs.update_plus()
@@ -5046,7 +5096,11 @@ class MainWindow(QWidget):
         self.plus_page.refresh()
 
     def _update_badge(self):
-        self.ver_lbl.setText(f"v{VERSION}  ·  PLUS" if self._plus else f"v{VERSION}")
+        tag = "  ·  PLUS TRIAL" if self.lic.kind() == "trial" else "  ·  PLUS" if self._plus else ""
+        self.ver_lbl.setText(f"v{VERSION}{tag}")
+        if self.lic.kind() == "trial":            # turn Plus off right when the trial ends
+            ms = int((self.lic.trial_end() - time.time()) * 1000) + 5000
+            QTimer.singleShot(max(1000, min(ms, 2 ** 31 - 1)), self.check_plus)
         self.ver_lbl.setStyleSheet(f"color:{C['violet'] if self._plus else C['dim']}; background:transparent;")
 
     def apply_schedule(self, quiet=False):

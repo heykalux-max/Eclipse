@@ -20,6 +20,10 @@ PREFIX = "ECL1-"
 PUBLIC_KEY = "8f5b0bff5eee08f69106a66877dc8da563d6d3b4c6eccb4be5a5d49b4d79e263"
 PLUS_URL = "https://github.com/heykalux-max/Eclipse#eclipse-plus"
 GRACE_DAYS = 3                 # a lapsed subscription keeps working this long, to cover renewal delays
+PRICE = "€3.99 / month"
+TRIAL_DAYS = 7
+TRIAL_REG = r"Software\Eclipse ThreatScanner"
+TRIAL_VALUE = "TrialStart" + os.environ.get("ECLIPSE_INSTANCE_TAG", "")   # test copies never use the real trial
 
 FEATURES = [
     ("ransom_guard", "Ransomware shield", "Decoy files and burst detection: a program that starts encrypting "
@@ -190,6 +194,7 @@ class License:
     def __init__(self, data_dir):
         self.path = os.path.join(data_dir, "license.key")
         self.state_path = os.path.join(data_dir, "license.state")
+        self.trial_path = os.path.join(data_dir, "license.trial")
         self.info = None          # parsed key
         self.error = ""           # why the stored key is not usable
         self.reload()
@@ -230,7 +235,7 @@ class License:
             return None
         return _day(self.info["expires"]) + (1 + GRACE_DAYS) * 86400
 
-    def active(self):
+    def key_active(self):
         if not self.info:
             return False
         end = self.expires_at()
@@ -238,24 +243,90 @@ class License:
             return False
         return True
 
+    # ---- free trial: once per Windows user, recorded in the registry AND in data\ (deleting one is not enough)
+    def _trial_start(self):
+        starts = []
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, TRIAL_REG) as k:
+                starts.append(float(winreg.QueryValueEx(k, TRIAL_VALUE)[0]))
+        except (OSError, ValueError, ImportError):
+            pass
+        try:
+            with open(self.trial_path, encoding="utf-8") as f:
+                starts.append(float(f.read().strip()))
+        except (OSError, ValueError):
+            pass
+        return min(starts) if starts else None
+
+    def trial_end(self):
+        st = self._trial_start()
+        return None if st is None else st + TRIAL_DAYS * 86400
+
+    def trial_used(self):
+        return self._trial_start() is not None
+
+    def trial_active(self):
+        st = self._trial_start()
+        if st is None:
+            return False
+        now = time.time()
+        if st > now + 86400:                  # start date in the future: clock or registry tampering
+            return False
+        return now < st + TRIAL_DAYS * 86400 and self._clock_ok()
+
+    def trial_ended(self):
+        return self.trial_used() and not self.trial_active() and not self.key_active()
+
+    def start_trial(self):
+        if self.trial_used():
+            raise ValueError("The free trial has already been used on this PC.")
+        now = str(int(time.time()))
+        try:
+            import winreg
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, TRIAL_REG, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.SetValueEx(k, TRIAL_VALUE, 0, winreg.REG_SZ, now)
+        except (OSError, ImportError):
+            pass
+        with open(self.trial_path, "w", encoding="utf-8") as f:
+            f.write(now)
+        self._clock_ok()
+
+    # ---- overall state
+    def active(self):
+        return self.key_active() or self.trial_active()
+
+    def kind(self):
+        """'key', 'trial' or None: what is giving Plus right now."""
+        return "key" if self.key_active() else "trial" if self.trial_active() else None
+
     def expired(self):
-        return bool(self.info) and not self.active()
+        """A subscription key is present but no longer valid."""
+        return bool(self.info) and not self.key_active()
 
     def days_left(self):
-        """Days until the paid period ends (the grace days are not advertised)."""
-        if not self.info or self.info["expires"] in ("", "0"):
-            return None
-        return max(0, int((_day(self.info["expires"]) + 86400 - time.time()) // 86400))
+        """Days until the paid period (or the trial) ends; grace days are not advertised. None = lifetime."""
+        if self.key_active():
+            if self.info["expires"] in ("", "0"):
+                return None
+            return max(0, int((_day(self.info["expires"]) + 86400 - time.time()) // 86400))
+        if self.trial_active():
+            return max(0, int(-(-(self.trial_end() - time.time()) // 86400)))
+        return 0
 
     def describe(self):
-        if not self.info:
-            return self.error or "Free version"
-        if self.info["expires"] in ("", "0"):
-            return f"Lifetime license  ·  {self.info['owner']}"
-        d = time.strftime("%d/%m/%Y", time.strptime(self.info["expires"], "%Y%m%d"))
-        if self.active():
-            return f"Active until {d}  ·  {self.info['owner']}"
-        return f"Expired on {d}  ·  {self.info['owner']}"
+        if self.key_active() or self.info:
+            if self.info["expires"] in ("", "0"):
+                return f"Lifetime license  ·  {self.info['owner']}"
+            d = time.strftime("%d/%m/%Y", time.strptime(self.info["expires"], "%Y%m%d"))
+            if self.key_active():
+                return f"Active until {d}  ·  {self.info['owner']}"
+            return f"Expired on {d}  ·  {self.info['owner']}"
+        if self.trial_active():
+            return "Free trial until " + time.strftime("%d/%m/%Y %H:%M", time.localtime(self.trial_end()))
+        if self.trial_used():
+            return "Your free trial has ended"
+        return self.error or "Free version"
 
     def activate(self, key):
         info = parse_key(key)                       # raises ValueError with the reason

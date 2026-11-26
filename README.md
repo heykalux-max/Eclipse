@@ -10,7 +10,7 @@ Open source threat scanner for Windows with a desktop interface (PySide6). It an
 
 ## Download
 
-**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.3.0)
+**[⬇ Download Eclipse.exe](https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe)** (Windows 10/11, 64-bit, version 1.4.0)
 
 A single file, no installation: put it in a folder of your choice and run it. The `data`, `Quarantine` and `Reports` folders are created next to the executable.
 
@@ -33,13 +33,15 @@ A single file, no installation: put it in a folder of your choice and run it. Th
 
 ## Eclipse Plus
 
-Everything above is free. **Eclipse Plus** is an optional subscription that adds:
+Everything above is free. **Eclipse Plus** is an optional subscription, **€3.99 / month**, that adds:
 
 | Plus feature | What it does |
 |---|---|
 | Ransomware shield | decoy files and burst detection in Documents, Desktop and Pictures; a program that starts encrypting your files is frozen on the spot |
 | Process memory scan | finds code injected into other programs, threads started from unbacked memory and process hollowing |
 | Scheduled scans | a quick system scan runs by itself every day or every week, even with Eclipse closed |
+
+**Free trial:** the first time, you can try Plus free for **7 days** with one click (Eclipse Plus page → *Start 7-day free trial*), no payment and no account needed. The trial can be used once per PC.
 
 How it works: after subscribing you receive a license key (`ECL1-…`). Paste it in **Eclipse Plus → License key**. The key is checked offline on your PC with a digital signature, nothing is sent online. A subscription key carries its end date; when you renew you receive a new key.
 

@@ -1,9 +1,9 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "url": "https://github.com/heykalux-max/Eclipse/raw/main/release/Eclipse.exe",
-  "sha256": "e2a9ade3e0f2953faa384be2baccd7e03b23bb79e9f19e86f2beedbcd29f0fe6",
-  "size": 23757824,
-  "notes": "Automatic updates: Eclipse now updates itself with one click (signed updates).",
+  "sha256": "a77bed7b862e9ab03e8c396559ab991dd0a60d4c04475f9cba526faddb8f756c",
+  "size": 23766528,
+  "notes": "Eclipse Plus now costs 3.99 EUR/month and can be tried free for 7 days.",
   "date": "2026-11-26",
-  "sig": "8b360e392a5238c6b2b11b1445cb4b4ec7c9980b45557c3cd928408de69f3a4c4b08d639f1955671eb35d9f773516d710091b695aaa030e0613967126bbd7d09"
+  "sig": "f021072f7e127affc2d55ece73c1a5f9a71c74bfe088acd54b0ff1c66e06cd3fd4666b2169f9b8c5118d8585072a39f6ce6bb013f069d6bef38a7057e4bff60e"
 }
